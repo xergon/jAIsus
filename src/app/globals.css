@@ -1,26 +1,273 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-inter);
+  --font-serif: var(--font-lora);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* Radial gradient utility */
+.bg-gradient-radial {
+  background: radial-gradient(ellipse at center, var(--tw-gradient-from), var(--tw-gradient-to));
+}
+
+/* Voice bar animations */
+.voice-bar-listening {
+  animation: waveform 0.8s ease-in-out infinite alternate;
+}
+
+.voice-bar-speaking {
+  animation: audioBars 0.5s ease-in-out infinite alternate;
+}
+
+@keyframes waveform {
+  0% {
+    height: 6px;
+    opacity: 0.4;
+  }
+  25% {
+    height: 20px;
+    opacity: 0.7;
+  }
+  50% {
+    height: 28px;
+    opacity: 0.9;
+  }
+  75% {
+    height: 14px;
+    opacity: 1;
+  }
+  100% {
+    height: 18px;
+    opacity: 0.8;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@keyframes audioBars {
+  0% {
+    height: 4px;
+    opacity: 0.5;
+  }
+  20% {
+    height: 18px;
+  }
+  40% {
+    height: 30px;
+    opacity: 1;
+  }
+  60% {
+    height: 22px;
+  }
+  80% {
+    height: 12px;
+  }
+  100% {
+    height: 8px;
+    opacity: 0.6;
+  }
+}
+
+/* Fade in animation */
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Slide up for panels */
+.animate-slide-up {
+  animation: slideUp 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* Pulse glow for hero */
+.animate-pulse-glow {
+  animation: pulseGlow 3s ease-in-out infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Pulse ring for active mic */
+.animate-pulse-ring {
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  animation: pulseRing 1.5s ease-out infinite;
+}
+
+@keyframes pulseRing {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 0 16px rgba(239, 68, 68, 0);
+  }
+}
+
+/* Jesus figure animations */
+.animate-breathe {
+  animation: breathe 4s ease-in-out infinite;
+}
+
+.animate-breathe-slow {
+  animation: breathe 6s ease-in-out infinite;
+  animation-delay: 1s;
+}
+
+@keyframes breathe {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.3;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.6;
+  }
+}
+
+/* Light ray beams */
+.ray-beam {
+  animation: rayPulse 3s ease-in-out infinite;
+  opacity: 0;
+}
+
+@keyframes rayPulse {
+  0%, 100% {
+    opacity: 0;
+    height: 80px;
+  }
+  50% {
+    opacity: 0.5;
+    height: 140px;
+  }
+}
+
+/* Halo glow */
+.halo-glow {
+  animation: haloGlow 3s ease-in-out infinite;
+  box-shadow: 0 0 8px rgba(251, 191, 36, 0.4), 0 0 20px rgba(251, 191, 36, 0.2);
+}
+
+@keyframes haloGlow {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(251, 191, 36, 0.3), 0 0 16px rgba(251, 191, 36, 0.15);
+    opacity: 0.6;
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(251, 191, 36, 0.6), 0 0 32px rgba(251, 191, 36, 0.3);
+    opacity: 1;
+  }
+}
+
+/* Heart glow */
+.animate-heart-glow {
+  animation: heartGlow 2.5s ease-in-out infinite;
+}
+
+@keyframes heartGlow {
+  0%, 100% {
+    filter: drop-shadow(0 0 4px rgba(255, 215, 0, 0.4));
+  }
+  50% {
+    filter: drop-shadow(0 0 16px rgba(255, 215, 0, 0.8));
+  }
+}
+
+/* Heart pulse */
+.animate-heart-pulse {
+  animation: heartPulse 1.5s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@keyframes heartPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+
+/* Floating particles */
+.particle-float {
+  animation: particleFloat 4s ease-in-out infinite;
+}
+
+@keyframes particleFloat {
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(0.5);
+  }
+  20% {
+    opacity: 0.8;
+  }
+  80% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-80px) scale(0);
+  }
+}
+
+/* Smooth scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d4d4d4;
+  border-radius: 4px;
+}
+
+/* Smooth transitions for panels */
+.panel-enter {
+  animation: slideUp 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Mobile viewport fix */
+html, body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Chat bubble animations */
+@keyframes messageFade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-message-enter {
+  animation: messageFade 0.4s ease-out;
 }

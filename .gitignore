@@ -39,3 +39,16 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# source videos (duplicates of public/)
+/Videos/
+
+# test artifacts
+/playwright-report/
+/test-results/
+
+# sandbox backups
+*.bak
+
+# claude session data
+.claude/

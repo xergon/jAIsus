@@ -6,14 +6,24 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:mobile": "playwright test -c playwright.config.ts --project=chromium-mobile",
+    "test:desktop": "playwright test -c playwright.config.ts --project=chromium-desktop",
+    "test:debug": "playwright test --debug"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.68",
+    "@ai-sdk/react": "^3.0.158",
+    "ai": "^6.0.156",
+    "lightningcss": "^1.32.0",
     "next": "16.2.3",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

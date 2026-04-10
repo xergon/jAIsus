@@ -1,0 +1,1499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>jAIsus - Spiritual Companion</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Lora:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0a0e1a 0%, #1a1f2e 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+            overflow-x: hidden;
+        }
+
+        /* Starfield background */
+        .starfield {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .star {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 50%;
+            animation: twinkle 3s infinite;
+        }
+
+        @keyframes twinkle {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 1; }
+        }
+
+        .phone-frame {
+            position: relative;
+            width: 393px;
+            height: 852px;
+            background: #0a0e1a;
+            border-radius: 50px;
+            border: 8px solid #1a1f2e;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+            overflow: hidden;
+            z-index: 1;
+        }
+
+        .phone-notch {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 180px;
+            height: 28px;
+            background: #0a0e1a;
+            border-radius: 0 0 30px 30px;
+            z-index: 10;
+        }
+
+        .app-content {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            background: #ffffff;
+            overflow: hidden;
+        }
+
+        /* Hero Section — extended, fades to WHITE */
+        .hero-section {
+            position: relative;
+            height: 72%;
+            max-height: 660px;
+            min-height: 420px;
+            text-align: center;
+            flex-shrink: 0;
+            overflow: hidden;
+        }
+
+        /* Jesus video/portrait as absolute background */
+        .hero-bg {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+            background: #0a0e1a;
+        }
+
+        .hero-bg video,
+        .hero-bg img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: top center;
+            filter: brightness(1.05) contrast(1.02);
+        }
+
+        /* Crossfade support */
+        .hero-bg video {
+            position: absolute;
+            inset: 0;
+            transition: opacity 167ms linear;
+        }
+
+        .portrait-fallback {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: top center;
+        }
+
+        /* Dark gradient at top for title readability */
+        .hero-top-gradient {
+            position: absolute;
+            inset: 0;
+            z-index: 1;
+            pointer-events: none;
+            background: linear-gradient(to bottom, rgba(10,14,26,0.8) 0%, rgba(10,14,26,0.35) 35%, transparent 55%);
+        }
+
+        /* Bottom fade — soft blend to WHITE */
+        .hero-bottom-fade {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 35%;
+            z-index: 2;
+            pointer-events: none;
+            background: linear-gradient(to top, rgba(255,255,255,1) 0%, rgba(255,255,255,0.9) 20%, rgba(255,255,255,0.5) 50%, rgba(255,255,255,0.15) 75%, transparent 100%);
+        }
+
+        /* All overlay UI */
+        .hero-overlay {
+            position: relative;
+            z-index: 5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 420px;
+            padding-top: 20px;
+        }
+
+        .hero-title {
+            font-family: 'Lora', serif;
+            font-size: 38px;
+            font-weight: 700;
+            margin-bottom: 2px;
+            color: #ffffff;
+            letter-spacing: 2px;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.7);
+        }
+
+        .hero-title .ai-text {
+            color: #d97706;
+            font-weight: 700;
+            filter: drop-shadow(0 0 10px rgba(217,119,6,0.5));
+        }
+
+        .hero-subtitle {
+            font-size: 11px;
+            font-weight: 600;
+            color: rgba(255,255,255,0.6);
+            letter-spacing: 3px;
+            margin-bottom: 5px;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+        }
+
+        /* Small halo above title */
+        .halo-small {
+            width: 40px;
+            height: 20px;
+            border: 1px solid rgba(217, 119, 6, 0.5);
+            border-radius: 50%;
+            margin-bottom: 4px;
+            animation: haloGlow 4s ease-in-out infinite;
+        }
+
+        @keyframes haloGlow {
+            0%, 100% {
+                box-shadow: 0 0 15px rgba(217, 119, 6, 0.3), inset 0 0 10px rgba(217, 119, 6, 0.1);
+            }
+            50% {
+                box-shadow: 0 0 25px rgba(217, 119, 6, 0.5), inset 0 0 15px rgba(217, 119, 6, 0.2);
+            }
+        }
+
+        /* AI badge — top right */
+        .ai-badge {
+            position: absolute;
+            top: 24px;
+            right: 16px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(0,0,0,0.3);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 20px;
+            padding: 4px 12px;
+            z-index: 10;
+        }
+
+        .ai-dot {
+            width: 8px;
+            height: 8px;
+            background: #22c55e;
+            border-radius: 50%;
+            animation: dotPulse 2s ease-in-out infinite;
+            box-shadow: 0 0 6px rgba(34,197,94,0.5);
+        }
+
+        @keyframes dotPulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+
+        .ai-badge-label {
+            font-size: 11px;
+            color: rgba(255,255,255,0.8);
+            font-weight: 600;
+        }
+
+        /* Voice visualizers — spread left/right */
+        .visualizer-row {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            padding: 0 20px;
+            margin-top: 16px;
+        }
+
+        .visualizer-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Spacer to push content down */
+        .hero-spacer {
+            flex: 1;
+            min-height: 200px;
+        }
+
+        /* Visualizer bars container */
+        .visualizer-bars {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            height: 48px;
+        }
+
+        .visualizer-bars.speaking-bars {
+            align-items: flex-end;
+        }
+
+        .visualizer-label {
+            font-size: 11px;
+            font-weight: 600;
+            white-space: nowrap;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.7);
+        }
+
+        .bar {
+            width: 3px;
+            border-radius: 9999px;
+            transition: all 0.3s ease;
+        }
+
+        /* Blue listening bars — sine wave pattern */
+        .bar.listening-bar {
+            background: linear-gradient(to top, #60a5fa, #93c5fd);
+            animation: listenPulse 1.2s ease-in-out infinite;
+        }
+
+        .bar.listening-bar:nth-child(1)  { height: 10px; animation-delay: 0s; }
+        .bar.listening-bar:nth-child(2)  { height: 18px; animation-delay: 0.08s; }
+        .bar.listening-bar:nth-child(3)  { height: 26px; animation-delay: 0.16s; }
+        .bar.listening-bar:nth-child(4)  { height: 32px; animation-delay: 0.24s; }
+        .bar.listening-bar:nth-child(5)  { height: 28px; animation-delay: 0.32s; }
+        .bar.listening-bar:nth-child(6)  { height: 20px; animation-delay: 0.4s; }
+        .bar.listening-bar:nth-child(7)  { height: 14px; animation-delay: 0.48s; }
+        .bar.listening-bar:nth-child(8)  { height: 22px; animation-delay: 0.56s; }
+        .bar.listening-bar:nth-child(9)  { height: 30px; animation-delay: 0.64s; }
+        .bar.listening-bar:nth-child(10) { height: 16px; animation-delay: 0.72s; }
+
+        @keyframes listenPulse {
+            0%, 100% { opacity: 0.6; transform: scaleY(0.8); }
+            50% { opacity: 1; transform: scaleY(1.3); }
+        }
+
+        /* Gold speaking bars — taller, amber gradient */
+        .bar.speaking-bar {
+            width: 2.5px;
+            background: linear-gradient(to top, #d97706, #fbbf24);
+            animation: speakPulse 0.6s ease-in-out infinite;
+        }
+
+        .bar.speaking-bar:nth-child(1)  { height: 6px;  animation-delay: 0s; }
+        .bar.speaking-bar:nth-child(2)  { height: 14px; animation-delay: 0.05s; }
+        .bar.speaking-bar:nth-child(3)  { height: 22px; animation-delay: 0.1s; }
+        .bar.speaking-bar:nth-child(4)  { height: 10px; animation-delay: 0.15s; }
+        .bar.speaking-bar:nth-child(5)  { height: 28px; animation-delay: 0.2s; }
+        .bar.speaking-bar:nth-child(6)  { height: 18px; animation-delay: 0.25s; }
+        .bar.speaking-bar:nth-child(7)  { height: 32px; animation-delay: 0.3s; }
+        .bar.speaking-bar:nth-child(8)  { height: 12px; animation-delay: 0.35s; }
+        .bar.speaking-bar:nth-child(9)  { height: 24px; animation-delay: 0.4s; }
+        .bar.speaking-bar:nth-child(10) { height: 8px;  animation-delay: 0.45s; }
+        .bar.speaking-bar:nth-child(11) { height: 20px; animation-delay: 0.5s; }
+        .bar.speaking-bar:nth-child(12) { height: 30px; animation-delay: 0.55s; }
+        .bar.speaking-bar:nth-child(13) { height: 16px; animation-delay: 0.6s; }
+        .bar.speaking-bar:nth-child(14) { height: 26px; animation-delay: 0.65s; }
+
+        @keyframes speakPulse {
+            0%, 100% { opacity: 0.5; transform: scaleY(0.7); }
+            50% { opacity: 1; transform: scaleY(1.4); }
+        }
+
+        .status-badge {
+            display: inline-block;
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            color: #22c55e;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 20px;
+            margin-bottom: 15px;
+        }
+
+        .status-badge.listening {
+            background: rgba(217, 119, 6, 0.1);
+            border-color: rgba(217, 119, 6, 0.3);
+            color: #d97706;
+        }
+
+        /* Tab buttons — light pill style */
+        .tab-buttons {
+            display: flex;
+            gap: 0;
+            padding: 0 16px;
+            margin-bottom: 12px;
+            flex-shrink: 0;
+            background: #f1f5f9;
+            border-radius: 12px;
+            margin-left: 16px;
+            margin-right: 16px;
+            padding: 4px;
+        }
+
+        .tab-button {
+            flex: 1;
+            padding: 8px 12px;
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            font-size: 13px;
+            font-weight: 600;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .tab-button:hover {
+            color: #475569;
+        }
+
+        .tab-button.active {
+            background: #ffffff;
+            color: #0f766e;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        /* Ask a Question — prominent blue CTA */
+        .ask-button {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            padding: 12px 16px;
+            background: #3b82f6;
+            border: none;
+            border-radius: 12px;
+            color: white;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px rgba(59,130,246,0.3);
+            margin-bottom: 10px;
+        }
+
+        .ask-button:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+        }
+
+        .ask-button:active {
+            transform: translateY(0);
+        }
+
+        /* Main content area — white */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding: 0 16px;
+            background: #ffffff;
+        }
+
+        .prompt-text {
+            display: none;
+        }
+
+        /* Action buttons — white cards with icons */
+        .action-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-shrink: 0;
+        }
+
+        .action-button {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            color: #334155;
+            font-size: 12px;
+            font-weight: 600;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: left;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        }
+
+        .action-button:hover {
+            border-color: #cbd5e1;
+            background: #f8fafc;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+
+        .action-button:active {
+            transform: translateY(0);
+        }
+
+        .action-icon {
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        /* Chat area — light theme */
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            margin-bottom: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding-right: 5px;
+            border-top: 1px solid #e2e8f0;
+            padding-top: 10px;
+        }
+
+        .chat-area::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .chat-area::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .chat-area::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 2px;
+        }
+
+        .chat-bubble {
+            max-width: 85%;
+            padding: 10px 14px;
+            border-radius: 14px;
+            font-size: 13px;
+            line-height: 1.5;
+            animation: bubbleIn 0.3s ease;
+        }
+
+        @keyframes bubbleIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .chat-bubble.user {
+            align-self: flex-end;
+            background: #3b82f6;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .chat-bubble.ai {
+            align-self: flex-start;
+            background: #f8fafc;
+            color: #334155;
+            border: 1px solid #e2e8f0;
+            border-bottom-left-radius: 4px;
+        }
+
+        .ai-label {
+            font-size: 10px;
+            color: #d97706;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .chat-context {
+            font-size: 11px;
+            color: #94a3b8;
+            margin-top: 4px;
+            font-style: italic;
+        }
+
+        /* Chat input — light theme */
+        .chat-input-area {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding: 10px 0;
+            border-top: 1px solid #e2e8f0;
+            flex-shrink: 0;
+        }
+
+        .chat-input-area input {
+            flex: 1;
+            padding: 10px 16px;
+            background: #ffffff;
+            border: 1px solid #d1d5db;
+            color: #1f2937;
+            font-size: 13px;
+            border-radius: 24px;
+            font-family: 'Inter', sans-serif;
+            transition: all 0.2s ease;
+        }
+
+        .chat-input-area input::placeholder {
+            color: #9ca3af;
+        }
+
+        .chat-input-area input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+        }
+
+        .send-button {
+            width: 36px;
+            height: 36px;
+            background: #3b82f6;
+            border: none;
+            border-radius: 50%;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        .send-button:hover {
+            background: #2563eb;
+        }
+
+        .send-button:active {
+            transform: scale(0.95);
+        }
+
+        /* Panels */
+        .panel-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
+            z-index: 99;
+        }
+
+        .panel-overlay.active {
+            display: block;
+        }
+
+        .slide-panel {
+            position: fixed;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 393px;
+            max-height: 70%;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-bottom: none;
+            border-radius: 24px 24px 0 0;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            transform: translateX(-50%) translateY(100%);
+            transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .slide-panel.active {
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .panel-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .panel-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1e293b;
+        }
+
+        .close-button {
+            width: 28px;
+            height: 28px;
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            font-size: 20px;
+            cursor: pointer;
+            transition: color 0.3s ease;
+        }
+
+        .close-button:hover {
+            color: #3b82f6;
+        }
+
+        .panel-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .panel-content::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .panel-content::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .panel-content::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, 0.15);
+            border-radius: 2px;
+        }
+
+        /* Prayer panel */
+        .prayer-textarea {
+            width: 100%;
+            padding: 12px;
+            background: #f8fafc;
+            border: 1px solid #d1d5db;
+            color: #1e293b;
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            resize: vertical;
+            min-height: 120px;
+            transition: all 0.3s ease;
+        }
+
+        .prayer-textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+        }
+
+        /* Parables list */
+        .parable-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .parable-item {
+            padding: 14px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            color: #334155;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .parable-item:hover {
+            background: #eff6ff;
+            border-color: #93c5fd;
+            transform: translateX(4px);
+        }
+
+        /* Panel buttons */
+        .panel-button {
+            width: 100%;
+            padding: 12px;
+            background: #3b82f6;
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 12px;
+        }
+
+        .panel-button:hover {
+            background: #2563eb;
+        }
+
+        .panel-button:active {
+            transform: scale(0.98);
+        }
+
+        /* Settings toggle */
+        .settings-group {
+            margin-bottom: 20px;
+        }
+
+        .settings-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .settings-title {
+            color: #1e293b;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .toggle {
+            width: 44px;
+            height: 24px;
+            background: #e2e8f0;
+            border: 1px solid #cbd5e1;
+            border-radius: 12px;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .toggle.active {
+            background: #22c55e;
+            border-color: #22c55e;
+        }
+
+        .toggle-knob {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: left 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        }
+
+        .toggle.active .toggle-knob {
+            left: 22px;
+        }
+
+        .settings-description {
+            color: #64748b;
+            font-size: 12px;
+            margin-bottom: 12px;
+        }
+
+        /* Teaching topics */
+        .teaching-topics {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+
+        .topic-button {
+            padding: 10px 8px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            color: #334155;
+            font-size: 12px;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+
+        .topic-button:hover {
+            background: #eff6ff;
+            border-color: #93c5fd;
+            color: #2563eb;
+        }
+
+        .teaching-content {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 14px;
+            color: #334155;
+            font-size: 13px;
+            line-height: 1.6;
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .teaching-content.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        /* Coming soon */
+        .coming-soon {
+            text-align: center;
+            padding: 40px 20px;
+            color: #94a3b8;
+        }
+
+        .coming-soon-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.6;
+        }
+
+        .coming-soon-text {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        /* Confirmation message */
+        .confirmation-message {
+            background: #f0fdf4;
+            border: 1px solid #86efac;
+            border-radius: 8px;
+            padding: 16px;
+            color: #16a34a;
+            text-align: center;
+            font-size: 13px;
+            display: none;
+            animation: slideUp 0.3s ease;
+        }
+
+        .confirmation-message.show {
+            display: block;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* About section */
+        .about-text {
+            color: #64748b;
+            font-size: 12px;
+            line-height: 1.6;
+            margin-bottom: 12px;
+        }
+
+        .about-version {
+            color: #94a3b8;
+            font-size: 11px;
+            text-align: center;
+            padding-top: 12px;
+            border-top: 1px solid #e2e8f0;
+        }
+    </style>
+</head>
+<body>
+    <div class="starfield" id="starfield"></div>
+
+    <div class="phone-frame">
+        <div class="phone-notch"></div>
+
+        <div class="app-content">
+            <!-- Hero Section — 70/30 split with video rotation -->
+            <div class="hero-section">
+                <!-- BACKGROUND: Dual video slots for crossfade -->
+                <div class="hero-bg">
+                    <video id="videoSlotA" muted playsinline style="opacity:1;"></video>
+                    <video id="videoSlotB" muted playsinline style="opacity:0;"></video>
+                    <!-- Fallback portrait if no videos load -->
+                    <img id="portraitFallback" src="public/jesus-portrait.jpg" alt="Jesus" class="portrait-fallback" style="display:none;">
+                </div>
+
+                <!-- Gradients for readability -->
+                <div class="hero-top-gradient"></div>
+                <div class="hero-bottom-fade"></div>
+
+                <!-- OVERLAY: All UI on top of Jesus -->
+                <div class="hero-overlay">
+                    <!-- AI badge top right -->
+                    <div class="ai-badge">
+                        <div class="ai-dot"></div>
+                        <span class="ai-badge-label">AI</span>
+                    </div>
+
+                    <!-- Halo + Title -->
+                    <div class="halo-small"></div>
+                    <div class="hero-title">
+                        j<span class="ai-text">AI</span>sus
+                    </div>
+                    <div class="hero-subtitle">SPIRITUAL COMPANION</div>
+
+                    <!-- Voice visualizers spread left/right — blue listening, gold speaking -->
+                    <div class="visualizer-row">
+                        <div class="visualizer-group">
+                            <div class="visualizer-bars">
+                                <div class="bar listening-bar"></div>
+                                <div class="bar listening-bar"></div>
+                                <div class="bar listening-bar"></div>
+                                <div class="bar listening-bar"></div>
+                                <div class="bar listening-bar"></div>
+                                <div class="bar listening-bar"></div>
+                                <div class="bar listening-bar"></div>
+                                <div class="bar listening-bar"></div>
+                                <div class="bar listening-bar"></div>
+                                <div class="bar listening-bar"></div>
+                            </div>
+                            <div class="visualizer-label" style="color: #93c5fd;">Listening...</div>
+                        </div>
+                        <div class="visualizer-group">
+                            <div class="visualizer-bars speaking-bars">
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                                <div class="bar speaking-bar"></div>
+                            </div>
+                            <div class="visualizer-label" style="color: #fbbf24;">jAIsus Speaking...</div>
+                        </div>
+                    </div>
+
+                    <!-- Spacer so Jesus body/heart is visible -->
+                    <div class="hero-spacer"></div>
+                </div>
+
+            </div>
+
+            <!-- Main Content — white theme -->
+            <div class="main-content">
+                <div class="tab-buttons">
+                    <button class="tab-button active" id="teachingsTab">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:inline; vertical-align:-2px; margin-right:4px;">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                            <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                        </svg>
+                        Dynamic Teachings
+                    </button>
+                    <button class="tab-button" id="listenTab">Listen/app</button>
+                </div>
+
+                <!-- Ask a Question — primary CTA -->
+                <button class="ask-button" id="askBtn">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="1" width="6" height="12" rx="3" />
+                        <path d="M5 10a7 7 0 0 0 14 0" />
+                        <line x1="12" y1="17" x2="12" y2="21" />
+                        <line x1="8" y1="21" x2="16" y2="21" />
+                    </svg>
+                    Ask a Question
+                </button>
+
+                <div class="action-buttons">
+                    <button class="action-button" id="prayerBtn"><span class="action-icon">🙏</span> Request Prayer</button>
+                    <button class="action-button" id="parablesBtn"><span class="action-icon">📖</span> Explore Parables</button>
+                    <button class="action-button" id="communityBtn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                            <circle cx="9" cy="7" r="4" />
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                        </svg>
+                        Community
+                    </button>
+                    <button class="action-button" id="settingsBtn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;">
+                            <circle cx="12" cy="12" r="3" />
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                        </svg>
+                        Settings
+                    </button>
+                </div>
+
+                <div class="chat-area" id="chatArea"></div>
+
+                <div class="chat-input-area">
+                    <input type="text" id="chatInput" placeholder="Type your question...">
+                    <button class="send-button" id="sendBtn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Panel Overlay -->
+    <div class="panel-overlay" id="panelOverlay"></div>
+
+    <!-- Prayer Panel -->
+    <div class="slide-panel" id="prayerPanel">
+        <div class="panel-header">
+            <div class="panel-title">Request Prayer</div>
+            <button class="close-button">×</button>
+        </div>
+        <div class="panel-content">
+            <textarea class="prayer-textarea" id="prayerText" placeholder="Share your prayer request..."></textarea>
+            <div class="confirmation-message" id="prayerConfirmation">✓ Prayer request submitted with gratitude</div>
+            <button class="panel-button" id="submitPrayerBtn">Submit Prayer Request</button>
+        </div>
+    </div>
+
+    <!-- Parables Panel -->
+    <div class="slide-panel" id="parablesPanel">
+        <div class="panel-header">
+            <div class="panel-title">Explore Parables</div>
+            <button class="close-button">×</button>
+        </div>
+        <div class="panel-content">
+            <div class="parable-list" id="parableList"></div>
+        </div>
+    </div>
+
+    <!-- Community Panel -->
+    <div class="slide-panel" id="communityPanel">
+        <div class="panel-header">
+            <div class="panel-title">Community</div>
+            <button class="close-button">×</button>
+        </div>
+        <div class="panel-content">
+            <div class="coming-soon">
+                <div class="coming-soon-icon">🤝</div>
+                <div class="coming-soon-text">Coming Soon</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Panel -->
+    <div class="slide-panel" id="settingsPanel">
+        <div class="panel-header">
+            <div class="panel-title">Settings</div>
+            <button class="close-button">×</button>
+        </div>
+        <div class="panel-content">
+            <div class="settings-group">
+                <div class="settings-label">
+                    <div class="settings-title">Auto-Speak Responses</div>
+                    <div class="toggle" id="autoSpeakToggle">
+                        <div class="toggle-knob"></div>
+                    </div>
+                </div>
+                <div class="settings-description">Automatically read AI responses aloud</div>
+            </div>
+
+            <button class="panel-button" id="clearHistoryBtn">Clear Chat History</button>
+
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
+                <div class="settings-title" style="margin-bottom: 12px;">About jAIsus</div>
+                <div class="about-text">
+                    jAIsus is an AI-powered spiritual companion designed to provide guidance, wisdom, and support through dialogue grounded in spiritual principles and compassion.
+                </div>
+                <div class="about-version">Version 1.0.0 • Built with ❤️</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Teachings Panel -->
+    <div class="slide-panel" id="teachingsPanel">
+        <div class="panel-header">
+            <div class="panel-title">Dynamic Teachings</div>
+            <button class="close-button">×</button>
+        </div>
+        <div class="panel-content">
+            <div class="teaching-topics">
+                <button class="topic-button" data-topic="Love">Love</button>
+                <button class="topic-button" data-topic="Forgiveness">Forgiveness</button>
+                <button class="topic-button" data-topic="Faith">Faith</button>
+                <button class="topic-button" data-topic="Hope">Hope</button>
+                <button class="topic-button" data-topic="Wisdom">Wisdom</button>
+                <button class="topic-button" data-topic="Gratitude">Gratitude</button>
+            </div>
+            <div id="teachingContent"></div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize starfield
+        function createStarfield() {
+            const starfield = document.getElementById('starfield');
+            const starCount = 50;
+            for (let i = 0; i < starCount; i++) {
+                const star = document.createElement('div');
+                star.className = 'star';
+                star.style.left = Math.random() * 100 + '%';
+                star.style.top = Math.random() * 100 + '%';
+                star.style.animationDelay = Math.random() * 3 + 's';
+                starfield.appendChild(star);
+            }
+        }
+        createStarfield();
+
+        // ===== VIDEO ROTATION WITH LAST-8-FRAME PROTECTION =====
+        (function() {
+            const VIDEOS = [
+                'Videos/jAisus-embraces.mp4',
+                'Videos/jAisus-loves-you.mp4',
+                'Videos/jAisus-prays.mp4',
+                'Videos/jAisus-angry.mp4',
+                'Videos/jAisus-suffers.mp4',
+                'Videos/jAisus-shakinghead.mp4',
+                'Videos/jAisus_thumps_up.mp4',
+            ];
+            // CRITICAL: Skip last 8 frames (~0.35s at 24fps)
+            const SKIP_END_SECONDS = 0.35;
+            // 4 frames at 24fps = 167ms
+            const CROSSFADE_MS = 167;
+
+            const slotA = document.getElementById('videoSlotA');
+            const slotB = document.getElementById('videoSlotB');
+            const fallback = document.getElementById('portraitFallback');
+            let currentIndex = 0;
+            let activeSlot = 'A';
+            let transitioning = false;
+            let availableVideos = [];
+
+            // Detect which videos exist
+            let checked = 0;
+            VIDEOS.forEach(function(src) {
+                const v = document.createElement('video');
+                v.preload = 'metadata';
+                v.src = src;
+                v.onloadedmetadata = function() {
+                    availableVideos.push(src);
+                    checked++;
+                    if (checked === VIDEOS.length) startPlayback();
+                };
+                v.onerror = function() {
+                    checked++;
+                    if (checked === VIDEOS.length) startPlayback();
+                };
+            });
+            // Timeout fallback
+            setTimeout(function() {
+                if (checked < VIDEOS.length) { checked = VIDEOS.length; startPlayback(); }
+            }, 4000);
+
+            var preloaded = false;
+
+            function startPlayback() {
+                if (availableVideos.length === 0) {
+                    fallback.style.display = 'block';
+                    return;
+                }
+                availableVideos = VIDEOS.filter(function(v) { return availableVideos.indexOf(v) !== -1; });
+                slotA.src = availableVideos[0];
+                slotA.load();
+                slotA.play().catch(function(){});
+                slotA.style.opacity = 1;
+                slotB.style.opacity = 0;
+                activeSlot = 'A';
+
+                slotA.addEventListener('timeupdate', function() {
+                    if (activeSlot === 'A') checkTime(slotA);
+                });
+                slotB.addEventListener('timeupdate', function() {
+                    if (activeSlot === 'B') checkTime(slotB);
+                });
+                slotA.addEventListener('ended', function() { if (!transitioning) transitionNext(); });
+                slotB.addEventListener('ended', function() { if (!transitioning) transitionNext(); });
+            }
+
+            // Preload next video into hidden slot so it's ready before crossfade
+            function preloadNextVideo() {
+                if (availableVideos.length <= 1 || preloaded) return;
+                preloaded = true;
+                var nextIdx = (currentIndex + 1) % availableVideos.length;
+                var nextSrc = availableVideos[nextIdx];
+                var nextSlot = (activeSlot === 'A') ? slotB : slotA;
+                if (nextSlot.getAttribute('data-preloaded') !== nextSrc) {
+                    nextSlot.src = nextSrc;
+                    nextSlot.load();
+                    nextSlot.setAttribute('data-preloaded', nextSrc);
+                }
+            }
+
+            function checkTime(video) {
+                if (!video.duration || video.duration === Infinity) return;
+                var remaining = video.duration - video.currentTime;
+                // Preload at halfway point
+                if (video.currentTime > video.duration * 0.5) {
+                    preloadNextVideo();
+                }
+                // Skip last 8 frames — pause + crossfade
+                if (remaining <= SKIP_END_SECONDS && !transitioning) {
+                    video.pause();
+                    transitionNext();
+                }
+            }
+
+            function transitionNext() {
+                if (transitioning || availableVideos.length === 0) return;
+                transitioning = true;
+                currentIndex = (currentIndex + 1) % availableVideos.length;
+
+                if (activeSlot === 'A') {
+                    // B is already preloaded — just play + swap
+                    slotB.play().catch(function(){});
+                    slotB.style.opacity = 1;
+                    // Tiny delay so both are visible simultaneously = no black
+                    requestAnimationFrame(function() { slotA.style.opacity = 0; });
+                    activeSlot = 'B';
+                } else {
+                    slotA.play().catch(function(){});
+                    slotA.style.opacity = 1;
+                    requestAnimationFrame(function() { slotB.style.opacity = 0; });
+                    activeSlot = 'A';
+                }
+                preloaded = false;
+                setTimeout(function() { transitioning = false; }, CROSSFADE_MS + 200);
+            }
+        })();
+
+        // AI responses
+        const aiResponses = [
+            "Peace be with you, my child. Let your heart not be troubled, for I am with you always.",
+            "Consider the lilies of the field — they neither toil nor spin, yet your Heavenly Father cares for each one. How much more does He care for you?",
+            "Love one another as I have loved you. In this, all will know that you walk in the light.",
+            "Ask, and it shall be given to you; seek, and you shall find; knock, and the door will be opened.",
+            "Be still and know that you are held in grace. Every burden you carry, you need not carry alone."
+        ];
+
+        let responseIndex = 0;
+
+        // Teachings
+        const teachings = {
+            Love: "Love is the cornerstone of all spiritual growth. When you love others as you love yourself, you reflect the divine light within. Let your actions be guided by compassion, and your heart will find its greatest purpose.",
+            Forgiveness: "Forgiveness is not weakness—it is the greatest strength. When you release resentment and choose compassion, you free yourself from the chains of the past. In forgiving others, you forgive yourself.",
+            Faith: "Faith is the bridge between doubt and possibility. Trust in the journey, even when the path is unclear. Your faith moves mountains and opens doors that seemed impossible.",
+            Hope: "Hope is the light that guides you through darkness. No matter how difficult your circumstances, hope reminds you that transformation is always possible. Hold onto it as your anchor.",
+            Wisdom: "Wisdom comes from listening deeply—to others, to your heart, and to the still voice within. Seek to understand before being understood, and truth will reveal itself.",
+            Gratitude: "Gratitude transforms your perspective and opens your heart to abundance. When you appreciate what you have, no matter how small, you invite more blessings into your life."
+        };
+
+        // Parables
+        const parables = [
+            "Good Samaritan",
+            "Prodigal Son",
+            "The Sower",
+            "Mustard Seed",
+            "Lost Sheep",
+            "Rich Man and Lazarus",
+            "Ten Virgins",
+            "Talents"
+        ];
+
+        // Initialize parables list
+        function initParables() {
+            const parableList = document.getElementById('parableList');
+            parables.forEach(parable => {
+                const item = document.createElement('div');
+                item.className = 'parable-item';
+                item.textContent = parable;
+                item.addEventListener('click', () => {
+                    sendMessage(`Tell me about the parable of the ${parable}`);
+                    closeAllPanels();
+                });
+                parableList.appendChild(item);
+            });
+        }
+        initParables();
+
+        // Chat functionality
+        const chatArea = document.getElementById('chatArea');
+        const chatInput = document.getElementById('chatInput');
+        const sendBtn = document.getElementById('sendBtn');
+
+        function addChatBubble(message, isUser, context) {
+            const bubble = document.createElement('div');
+            bubble.className = `chat-bubble ${isUser ? 'user' : 'ai'}`;
+
+            if (!isUser) {
+                const label = document.createElement('div');
+                label.className = 'ai-label';
+                label.textContent = 'jAIsus';
+                bubble.appendChild(label);
+            }
+
+            const text = document.createElement('div');
+            text.textContent = message;
+            bubble.appendChild(text);
+
+            if (context) {
+                const ctx = document.createElement('div');
+                ctx.className = 'chat-context';
+                ctx.textContent = context;
+                bubble.appendChild(ctx);
+            }
+
+            chatArea.appendChild(bubble);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        function sendMessage(customMessage = null) {
+            const message = customMessage || chatInput.value.trim();
+            if (!message) return;
+
+            addChatBubble(message, true);
+            chatInput.value = '';
+
+            // Simulate AI response delay
+            setTimeout(() => {
+                const response = aiResponses[responseIndex % aiResponses.length];
+                addChatBubble(response, false);
+                responseIndex++;
+            }, 1000 + Math.random() * 1000);
+        }
+
+        sendBtn.addEventListener('click', sendMessage);
+        chatInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        // Panel management
+        const panelOverlay = document.getElementById('panelOverlay');
+        const panels = {
+            prayer: document.getElementById('prayerPanel'),
+            parables: document.getElementById('parablesPanel'),
+            community: document.getElementById('communityPanel'),
+            settings: document.getElementById('settingsPanel'),
+            teachings: document.getElementById('teachingsPanel')
+        };
+
+        function openPanel(panelName) {
+            panelOverlay.classList.add('active');
+            panels[panelName].classList.add('active');
+        }
+
+        function closeAllPanels() {
+            panelOverlay.classList.remove('active');
+            Object.values(panels).forEach(panel => panel.classList.remove('active'));
+        }
+
+        // Button listeners
+        document.getElementById('prayerBtn').addEventListener('click', () => openPanel('prayer'));
+        document.getElementById('parablesBtn').addEventListener('click', () => openPanel('parables'));
+        document.getElementById('communityBtn').addEventListener('click', () => openPanel('community'));
+        document.getElementById('settingsBtn').addEventListener('click', () => openPanel('settings'));
+
+        // Close buttons
+        document.querySelectorAll('.close-button').forEach(btn => {
+            btn.addEventListener('click', closeAllPanels);
+        });
+
+        // Panel overlay click
+        panelOverlay.addEventListener('click', closeAllPanels);
+
+        // Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeAllPanels();
+        });
+
+        // Prayer functionality
+        document.getElementById('submitPrayerBtn').addEventListener('click', () => {
+            const prayerText = document.getElementById('prayerText');
+            const confirmation = document.getElementById('prayerConfirmation');
+            if (prayerText.value.trim()) {
+                confirmation.classList.add('show');
+                prayerText.value = '';
+                setTimeout(() => {
+                    confirmation.classList.remove('show');
+                    closeAllPanels();
+                }, 2000);
+            }
+        });
+
+        // Settings functionality
+        document.getElementById('autoSpeakToggle').addEventListener('click', function() {
+            this.classList.toggle('active');
+        });
+
+        document.getElementById('clearHistoryBtn').addEventListener('click', () => {
+            chatArea.innerHTML = '';
+            responseIndex = 0;
+            closeAllPanels();
+        });
+
+        // Tab buttons
+        document.getElementById('teachingsTab').addEventListener('click', function() {
+            this.classList.add('active');
+            document.getElementById('listenTab').classList.remove('active');
+        });
+
+        document.getElementById('listenTab').addEventListener('click', function() {
+            this.classList.add('active');
+            document.getElementById('teachingsTab').classList.remove('active');
+        });
+
+        // Dynamic teachings
+        document.getElementById('teachingsTab').addEventListener('click', () => {
+            openPanel('teachings');
+        });
+
+        document.querySelectorAll('.topic-button').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const topic = this.dataset.topic;
+                const content = document.getElementById('teachingContent');
+                content.textContent = teachings[topic];
+                content.classList.add('active');
+
+                // Send as chat message
+                setTimeout(() => {
+                    sendMessage(`I would like to learn about ${topic}`);
+                    closeAllPanels();
+                }, 500);
+            });
+        });
+
+        // Ask button — focuses input
+        document.getElementById('askBtn').addEventListener('click', () => {
+            chatInput.focus();
+        });
+
+        // Initial message with context
+        setTimeout(() => {
+            addChatBubble("Greetings, dear friend. I am jAIsus, your spiritual companion. How may I serve your soul today?", false, "Matthew 28:20 — I am with you always");
+        }, 500);
+    </script>
+</body>
+</html>
