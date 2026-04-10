@@ -8,7 +8,7 @@ export async function POST(req: Request) {
   const { topic }: { topic: string } = await req.json();
 
   const { text } = await generateText({
-    model: anthropic('claude-sonnet-4-6-20250627'),
+    model: anthropic('claude-sonnet-4-6'),
     system: TEACHING_PROMPT,
     prompt: `Generate a spiritual teaching about: ${topic}`,
   });
