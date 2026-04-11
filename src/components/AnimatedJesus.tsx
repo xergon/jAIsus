@@ -102,7 +102,7 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
     va.load();
     va.style.opacity = '1';
     va.style.zIndex = '2'; // On top
-    vb.style.opacity = '1'; // Always full opacity — never partially transparent
+    vb.style.opacity = '0'; // Hidden until first transition
     vb.style.zIndex = '1'; // Behind
     activeSlotRef.current = 'A';
     currentIndexRef.current = 0;
@@ -112,12 +112,19 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
     // Try to autoplay
     va.play().catch(() => {});
 
-    function getActiveVideo(): HTMLVideoElement | null {
-      return activeSlotRef.current === 'A' ? va : vb;
+    function getActiveVideo(): HTMLVideoElement {
+      return activeSlotRef.current === 'A' ? va! : vb!;
     }
 
-    function getInactiveVideo(): HTMLVideoElement | null {
-      return activeSlotRef.current === 'A' ? vb : va;
+    function getInactiveVideo(): HTMLVideoElement {
+      return activeSlotRef.current === 'A' ? vb! : va!;
+    }
+
+    function releaseVideo(el: HTMLVideoElement) {
+      // Fully release video resources to prevent memory buildup
+      el.pause();
+      el.removeAttribute('src');
+      el.load(); // Forces browser to release the decoder
     }
 
     function preloadNext() {
@@ -126,11 +133,10 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
       const nextIdx = (currentIndexRef.current + 1) % videos.length;
       const nextSrc = videos[nextIdx];
       const inactive = getInactiveVideo();
-      if (inactive && inactive.getAttribute('data-src') !== nextSrc) {
+      if (inactive.getAttribute('data-src') !== nextSrc) {
         inactive.src = nextSrc;
         inactive.load();
         inactive.setAttribute('data-src', nextSrc);
-        // Keep it at full opacity but behind the active video
         inactive.style.opacity = '1';
         inactive.style.zIndex = '1';
       }
@@ -145,46 +151,72 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
       const incoming = getInactiveVideo();
       const outgoing = getActiveVideo();
 
-      if (incoming) {
-        // Incoming is BEHIND the outgoing, already at full opacity.
-        // Start playing it so the first frame (still portrait) is rendered.
-        incoming.style.opacity = '1';
-        incoming.style.zIndex = '1'; // Behind for now
-        incoming.play().catch(() => {});
-      }
+      // Incoming is BEHIND the outgoing, already at full opacity.
+      incoming.style.opacity = '1';
+      incoming.style.zIndex = '1';
+      incoming.play().catch((e) => {
+        console.warn('Video play failed:', e);
+        // If play fails, force transition anyway after timeout
+        setTimeout(() => { transitioningRef.current = false; }, 500);
+      });
 
-      // Wait 2 frames for the incoming video to render its first frame,
-      // then instantly swap z-index: incoming goes on top, outgoing goes behind.
-      // Both are at opacity 1 the entire time = ZERO brightness dip.
+      // Wait 2 frames for the incoming video to render, then swap z-index
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          if (incoming) {
-            incoming.style.zIndex = '2'; // Now on top
-          }
-          if (outgoing) {
-            outgoing.style.zIndex = '1'; // Now behind
-            // Pause after a tiny delay so the swap is visually complete
-            setTimeout(() => {
-              outgoing.pause();
-              outgoing.style.opacity = '0'; // Hide to save GPU compositing
-            }, 50);
-          }
+          if (!mountedRef.current) return;
+          incoming.style.zIndex = '2';
+          outgoing.style.zIndex = '1';
+          // Release outgoing video after swap is visually complete
+          setTimeout(() => {
+            outgoing.pause();
+            outgoing.style.opacity = '0';
+            // Release decoder memory — this is critical to prevent Chrome crashes
+            releaseVideo(outgoing);
+          }, 100);
         });
       });
 
-      // Swap active slot
       activeSlotRef.current = activeSlotRef.current === 'A' ? 'B' : 'A';
       preloadedRef.current = false;
 
-      // Allow next transition after swap settles
       setTimeout(() => {
         transitioningRef.current = false;
-      }, 300);
+      }, 400);
     }
+
+    // Stall watchdog: if the active video hasn't progressed in 3 seconds, force-skip
+    let lastTime = 0;
+    let stallCount = 0;
+    const stallWatchdog = setInterval(() => {
+      if (!mountedRef.current) return;
+      const active = getActiveVideo();
+      if (active.paused && !transitioningRef.current) {
+        // Video stopped but we didn't transition — restart or skip
+        stallCount++;
+        if (stallCount > 1) {
+          console.warn('Video stalled, forcing transition');
+          transitionToNext();
+          stallCount = 0;
+        } else {
+          // Try to resume first
+          active.play().catch(() => transitionToNext());
+        }
+      } else if (active.currentTime === lastTime && !active.paused) {
+        // Playing but not progressing — stalled decoder
+        stallCount++;
+        if (stallCount > 2) {
+          console.warn('Video decoder stalled, skipping');
+          transitionToNext();
+          stallCount = 0;
+        }
+      } else {
+        stallCount = 0;
+      }
+      lastTime = active.currentTime;
+    }, 3000);
 
     function onTimeUpdate(this: HTMLVideoElement) {
       const video = this;
-      // Only process timeupdate for the currently active video
       if (
         (activeSlotRef.current === 'A' && video !== va) ||
         (activeSlotRef.current === 'B' && video !== vb)
@@ -193,12 +225,12 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
       if (!video.duration || video.duration === Infinity) return;
       const remaining = video.duration - video.currentTime;
 
-      // Preload at halfway
-      if (video.currentTime > video.duration * 0.5) {
+      // Preload at 60% (gives more time to load)
+      if (video.currentTime > video.duration * 0.6) {
         preloadNext();
       }
 
-      // Skip last 8 frames: pause + crossfade
+      // Skip last frames: pause + crossfade
       if (remaining <= SKIP_END_SECONDS && !transitioningRef.current) {
         video.pause();
         transitionToNext();
@@ -206,39 +238,52 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
     }
 
     function onEnded(this: HTMLVideoElement) {
-      // Safety fallback if timeupdate didn't catch the end
       if (!transitioningRef.current) {
         transitionToNext();
       }
     }
 
     function onError(this: HTMLVideoElement) {
-      // If a video errors during playback, skip to next
-      console.warn('Video error, skipping to next');
+      console.warn('Video error on', this.src?.split('/').pop(), ', skipping');
       if (!transitioningRef.current) {
         transitionToNext();
       }
     }
 
-    // Attach listeners
+    // Handle tab visibility — pause when hidden, resume when visible
+    function onVisibilityChange() {
+      if (document.hidden) {
+        getActiveVideo().pause();
+      } else {
+        // Resume after returning to tab
+        const active = getActiveVideo();
+        if (active.src) {
+          active.play().catch(() => {});
+        }
+      }
+    }
+
     va.addEventListener('timeupdate', onTimeUpdate);
     vb.addEventListener('timeupdate', onTimeUpdate);
     va.addEventListener('ended', onEnded);
     vb.addEventListener('ended', onEnded);
     va.addEventListener('error', onError);
     vb.addEventListener('error', onError);
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
+      clearInterval(stallWatchdog);
       va.removeEventListener('timeupdate', onTimeUpdate);
       vb.removeEventListener('timeupdate', onTimeUpdate);
       va.removeEventListener('ended', onEnded);
       vb.removeEventListener('ended', onEnded);
       va.removeEventListener('error', onError);
       vb.removeEventListener('error', onError);
-      va.pause();
-      vb.pause();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      releaseVideo(va);
+      releaseVideo(vb);
     };
-  }, [mode]); // Only re-run when mode changes, NOT on every state update
+  }, [mode]); // Only re-run when mode changes
 
   // Canvas animation for image and fallback modes
   useEffect(() => {

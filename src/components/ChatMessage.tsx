@@ -5,9 +5,10 @@ import type { UIMessage } from 'ai';
 
 interface ChatMessageProps {
   message: UIMessage;
+  hidden?: boolean; // Voice-only mode: hide AI response text while speaking
 }
 
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const [expanded, setExpanded] = useState(false);
 
@@ -18,13 +19,6 @@ export function ChatMessage({ message }: ChatMessageProps) {
 
   if (!textContent) return null;
 
-  // Detect parable context references
-  const parableMatch = textContent.match(/(?:Parable of the |parable of the )([^.!?,]+)/i);
-  const contextLabel = parableMatch ? `Parable of the ${parableMatch[1].trim()}` : null;
-
-  const isLong = textContent.length > 300;
-  const displayText = isLong && !expanded ? textContent.slice(0, 280) + '...' : textContent;
-
   if (isUser) {
     return (
       <div className="flex justify-end animate-fade-in">
@@ -34,6 +28,36 @@ export function ChatMessage({ message }: ChatMessageProps) {
       </div>
     );
   }
+
+  // Voice-only: while speaking, show a minimal indicator instead of the full text
+  if (hidden) {
+    return (
+      <div className="flex justify-start animate-fade-in">
+        <div className="max-w-[90%]">
+          <div className="flex items-center gap-1.5 mb-1">
+            <span className="text-xs font-semibold text-amber-700 tracking-wide">jAIsus</span>
+          </div>
+          <div className="bg-white/60 border border-stone-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1">
+                {[0, 1, 2].map(i => (
+                  <div key={i} className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" style={{ animationDelay: `${i * 0.3}s` }} />
+                ))}
+              </div>
+              <span className="text-xs text-stone-400 italic">speaking...</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Detect parable context references
+  const parableMatch = textContent.match(/(?:Parable of the |parable of the )([^.!?,]+)/i);
+  const contextLabel = parableMatch ? `Parable of the ${parableMatch[1].trim()}` : null;
+
+  const isLong = textContent.length > 300;
+  const displayText = isLong && !expanded ? textContent.slice(0, 280) + '...' : textContent;
 
   return (
     <div className="flex justify-start animate-fade-in">

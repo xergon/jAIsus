@@ -25,6 +25,7 @@ export function ChatInterface() {
   const [activePanel, setActivePanel] = useState<ActivePanel>('none');
   const [autoSpeak, setAutoSpeak] = useState(true);
   const [mounted, setMounted] = useState(false);
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef<string>('ready');
 
@@ -62,8 +63,12 @@ export function ChatInterface() {
           .map(p => p.text)
           .join('');
         if (text) {
+          setSpeakingMessageId(lastMessage.id);
           startSpeaking();
-          speak(text).then(reset);
+          speak(text).then(() => {
+            setSpeakingMessageId(null);
+            reset();
+          });
         }
       }
     }
@@ -73,6 +78,7 @@ export function ChatInterface() {
   // Update voice state when speaking state changes
   useEffect(() => {
     if (!isSpeaking && voiceState === 'speaking') {
+      setSpeakingMessageId(null);
       reset();
     }
   }, [isSpeaking, voiceState, reset]);
@@ -160,7 +166,11 @@ export function ChatInterface() {
             </div>
           )}
           {messages.map(message => (
-            <ChatMessage key={message.id} message={message} />
+            <ChatMessage
+              key={message.id}
+              message={message}
+              hidden={message.id === speakingMessageId && isSpeaking}
+            />
           ))}
           {status === 'submitted' && (
             <div className="flex justify-start animate-fade-in">
