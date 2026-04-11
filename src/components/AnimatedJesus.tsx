@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface AnimatedJesusProps {
   isSpeaking?: boolean;
@@ -9,15 +9,15 @@ interface AnimatedJesusProps {
 /**
  * Photorealistic animated Jesus — full-bleed background with multi-video rotation.
  *
- * - Videos crossfade between each other using dual video slots (A/B)
- * - CRITICAL: Last 8 frames of each video are NEVER displayed.
- *   At ~24fps that's ~0.333s. We monitor timeupdate and trigger
- *   crossfade when remaining time <= SKIP_END_SECONDS.
- * - Falls back to static image or canvas if no videos available.
- * - Videos start/end on the still portrait frame for smooth blending.
+ * Uses refs + direct DOM manipulation for opacity to avoid React re-render
+ * issues that cause dark flashes between crossfades.
+ *
+ * - Videos crossfade using dual video slots (A/B)
+ * - Last 8 frames of each video are NEVER displayed
+ * - Preloads next video at halfway point
+ * - Falls back to static image or canvas if no videos available
  */
 
-// Emotion video playlist — all in Videos/ folder with jAisus- prefix
 const VIDEO_PLAYLIST = [
   '/jAisus-embraces.mp4',
   '/jAisus-loves-you.mp4',
@@ -28,10 +28,8 @@ const VIDEO_PLAYLIST = [
   '/jAisus_thumps_up.mp4',
 ];
 
-// Skip the last 8 frames. At 24fps = 0.333s, use 0.35s for safety margin
-const SKIP_END_SECONDS = 0.35;
-// 4 frames at 24fps ≈ 167ms
-const CROSSFADE_MS = 167;
+const SKIP_END_SECONDS = 0.35; // 8 frames at 24fps
+const CROSSFADE_MS = 167; // 4 frames at 24fps
 
 export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
   const videoARef = useRef<HTMLVideoElement>(null);
@@ -41,23 +39,26 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
   const [mode, setMode] = useState<'video' | 'image' | 'canvas'>('canvas');
   const [imageLoaded, setImageLoaded] = useState(false);
   const imageRef = useRef<HTMLImageElement | null>(null);
-  const [availableVideos, setAvailableVideos] = useState<string[]>([]);
-  const [activeSlot, setActiveSlot] = useState<'A' | 'B'>('A');
-  const [opacityA, setOpacityA] = useState(1);
-  const [opacityB, setOpacityB] = useState(0);
+
+  // ALL mutable playback state as refs — no React re-renders during playback
+  const videosRef = useRef<string[]>([]);
+  const activeSlotRef = useRef<'A' | 'B'>('A');
   const currentIndexRef = useRef(0);
   const transitioningRef = useRef(false);
+  const preloadedRef = useRef(false);
+  const mountedRef = useRef(true);
 
   // Detect available videos on mount
   useEffect(() => {
+    mountedRef.current = true;
     const found: string[] = [];
     let checked = 0;
 
     function done() {
+      if (!mountedRef.current) return;
       if (found.length > 0) {
-        // Preserve playlist order
         const ordered = VIDEO_PLAYLIST.filter(v => found.includes(v));
-        setAvailableVideos(ordered);
+        videosRef.current = ordered;
         setMode('video');
       } else {
         const tryImages = ['/jesus-portrait.jpg', '/jesus-portrait.png'];
@@ -82,123 +83,148 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
     });
 
     setTimeout(() => { if (checked < VIDEO_PLAYLIST.length) { checked = VIDEO_PLAYLIST.length; done(); } }, 4000);
+
+    return () => { mountedRef.current = false; };
   }, []);
 
-  // Preload next video into the hidden slot so it's ready before crossfade
-  const preloadNextRef = useRef(false);
-
-  const preloadNext = useCallback(() => {
-    if (availableVideos.length <= 1 || preloadNextRef.current) return;
-    preloadNextRef.current = true;
-    const nextIndex = (currentIndexRef.current + 1) % availableVideos.length;
-    const nextSrc = availableVideos[nextIndex];
-    const nextSlot = activeSlot === 'A' ? videoBRef.current : videoARef.current;
-    if (nextSlot && nextSlot.getAttribute('data-preloaded') !== nextSrc) {
-      nextSlot.src = nextSrc;
-      nextSlot.load();
-      nextSlot.setAttribute('data-preloaded', nextSrc);
-    }
-  }, [availableVideos, activeSlot]);
-
-  // Crossfade: the hidden slot is already preloaded — just play + swap opacity
-  const transitionToNext = useCallback(() => {
-    if (availableVideos.length === 0 || transitioningRef.current) return;
-    transitioningRef.current = true;
-
-    const nextIndex = (currentIndexRef.current + 1) % availableVideos.length;
-    currentIndexRef.current = nextIndex;
-
-    if (activeSlot === 'A') {
-      const vb = videoBRef.current;
-      if (vb) {
-        // Should already be preloaded — just play
-        const playPromise = vb.play();
-        if (playPromise) playPromise.catch(() => {});
-      }
-      // Both at full opacity briefly = no black flash
-      setOpacityB(1);
-      // Slight delay then fade out A
-      requestAnimationFrame(() => {
-        setOpacityA(0);
-      });
-      setActiveSlot('B');
-    } else {
-      const va = videoARef.current;
-      if (va) {
-        const playPromise = va.play();
-        if (playPromise) playPromise.catch(() => {});
-      }
-      setOpacityA(1);
-      requestAnimationFrame(() => {
-        setOpacityB(0);
-      });
-      setActiveSlot('A');
-    }
-
-    preloadNextRef.current = false;
-    // Allow next transition after crossfade completes
-    setTimeout(() => { transitioningRef.current = false; }, CROSSFADE_MS + 200);
-  }, [availableVideos, activeSlot]);
-
-  // Start first video and monitor timeupdate to skip last 8 frames
+  // Video playback engine — runs once when mode becomes 'video'
   useEffect(() => {
-    if (mode !== 'video' || availableVideos.length === 0) return;
+    if (mode !== 'video') return;
+    const videos = videosRef.current;
+    if (videos.length === 0) return;
 
     const va = videoARef.current;
-    if (va && !va.src) {
-      va.src = availableVideos[0];
-      va.load();
-      va.play().catch(() => {});
-      setOpacityA(1);
-      setOpacityB(0);
-      setActiveSlot('A');
+    const vb = videoBRef.current;
+    if (!va || !vb) return;
+
+    // Initialize: load first video into slot A, set opacities directly
+    va.src = videos[0];
+    va.load();
+    va.style.opacity = '1';
+    vb.style.opacity = '0';
+    activeSlotRef.current = 'A';
+    currentIndexRef.current = 0;
+    preloadedRef.current = false;
+    transitioningRef.current = false;
+
+    // Try to autoplay — some browsers need this after load
+    va.play().catch(() => {});
+
+    function getActiveVideo(): HTMLVideoElement | null {
+      return activeSlotRef.current === 'A' ? va : vb;
     }
 
-    // Monitor time: preload at 50%, crossfade at end minus 8 frames
-    function checkTime(video: HTMLVideoElement) {
+    function getInactiveVideo(): HTMLVideoElement | null {
+      return activeSlotRef.current === 'A' ? vb : va;
+    }
+
+    function preloadNext() {
+      if (videos.length <= 1 || preloadedRef.current) return;
+      preloadedRef.current = true;
+      const nextIdx = (currentIndexRef.current + 1) % videos.length;
+      const nextSrc = videos[nextIdx];
+      const inactive = getInactiveVideo();
+      if (inactive && inactive.getAttribute('data-src') !== nextSrc) {
+        inactive.src = nextSrc;
+        inactive.load();
+        inactive.setAttribute('data-src', nextSrc);
+      }
+    }
+
+    function transitionToNext() {
+      if (transitioningRef.current || videos.length === 0) return;
+      transitioningRef.current = true;
+
+      currentIndexRef.current = (currentIndexRef.current + 1) % videos.length;
+
+      const incoming = getInactiveVideo();
+      const outgoing = getActiveVideo();
+
+      if (incoming) {
+        // CRITICAL: Set incoming to full opacity BEFORE starting playback
+        incoming.style.opacity = '1';
+        incoming.play().catch(() => {});
+      }
+
+      // One frame later, fade out the outgoing video
+      // This ensures both videos overlap at full opacity = no black flash
+      requestAnimationFrame(() => {
+        if (outgoing) {
+          outgoing.style.opacity = '0';
+        }
+      });
+
+      // Swap active slot
+      activeSlotRef.current = activeSlotRef.current === 'A' ? 'B' : 'A';
+      preloadedRef.current = false;
+
+      // Allow next transition after crossfade + safety margin
+      setTimeout(() => {
+        transitioningRef.current = false;
+        // Pause the now-hidden outgoing video to save resources
+        if (outgoing) {
+          outgoing.pause();
+        }
+      }, CROSSFADE_MS + 300);
+    }
+
+    function onTimeUpdate(this: HTMLVideoElement) {
+      const video = this;
+      // Only process timeupdate for the currently active video
+      if (
+        (activeSlotRef.current === 'A' && video !== va) ||
+        (activeSlotRef.current === 'B' && video !== vb)
+      ) return;
+
       if (!video.duration || video.duration === Infinity) return;
       const remaining = video.duration - video.currentTime;
-      const halfway = video.duration * 0.5;
 
-      // Preload next video when we pass the halfway point
-      if (video.currentTime > halfway) {
+      // Preload at halfway
+      if (video.currentTime > video.duration * 0.5) {
         preloadNext();
       }
 
-      // CRITICAL: Skip last 8 frames — pause + crossfade
+      // Skip last 8 frames: pause + crossfade
       if (remaining <= SKIP_END_SECONDS && !transitioningRef.current) {
         video.pause();
         transitionToNext();
       }
     }
 
-    function onTimeUpdateA() {
-      const v = videoARef.current;
-      if (v && activeSlot === 'A') checkTime(v);
-    }
-    function onTimeUpdateB() {
-      const v = videoBRef.current;
-      if (v && activeSlot === 'B') checkTime(v);
+    function onEnded(this: HTMLVideoElement) {
+      // Safety fallback if timeupdate didn't catch the end
+      if (!transitioningRef.current) {
+        transitionToNext();
+      }
     }
 
-    // Also handle natural ended event as safety fallback
-    function onEndedA() { if (!transitioningRef.current) transitionToNext(); }
-    function onEndedB() { if (!transitioningRef.current) transitionToNext(); }
+    function onError(this: HTMLVideoElement) {
+      // If a video errors during playback, skip to next
+      console.warn('Video error, skipping to next');
+      if (!transitioningRef.current) {
+        transitionToNext();
+      }
+    }
 
-    const vaEl = videoARef.current;
-    const vbEl = videoBRef.current;
-    vaEl?.addEventListener('timeupdate', onTimeUpdateA);
-    vbEl?.addEventListener('timeupdate', onTimeUpdateB);
-    vaEl?.addEventListener('ended', onEndedA);
-    vbEl?.addEventListener('ended', onEndedB);
+    // Attach listeners
+    va.addEventListener('timeupdate', onTimeUpdate);
+    vb.addEventListener('timeupdate', onTimeUpdate);
+    va.addEventListener('ended', onEnded);
+    vb.addEventListener('ended', onEnded);
+    va.addEventListener('error', onError);
+    vb.addEventListener('error', onError);
 
     return () => {
-      vaEl?.removeEventListener('timeupdate', onTimeUpdateA);
-      vbEl?.removeEventListener('timeupdate', onTimeUpdateB);
-      vaEl?.removeEventListener('ended', onEndedA);
-      vbEl?.removeEventListener('ended', onEndedB);
+      va.removeEventListener('timeupdate', onTimeUpdate);
+      vb.removeEventListener('timeupdate', onTimeUpdate);
+      va.removeEventListener('ended', onEnded);
+      vb.removeEventListener('ended', onEnded);
+      va.removeEventListener('error', onError);
+      vb.removeEventListener('error', onError);
+      va.pause();
+      vb.pause();
     };
-  }, [mode, availableVideos, activeSlot, transitionToNext, preloadNext]);
+  }, [mode]); // Only re-run when mode changes, NOT on every state update
 
   // Canvas animation for image and fallback modes
   useEffect(() => {
@@ -255,7 +281,6 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
       ctx.fillStyle = '#0a0e1a';
       ctx.fillRect(0, 0, W, H);
 
-      // Ambient glow
       const bgGrad = ctx.createRadialGradient(W / 2, H * 0.3, 20, W / 2, H * 0.45, W * 0.8);
       bgGrad.addColorStop(0, 'rgba(255, 248, 230, 0.12)');
       bgGrad.addColorStop(0.5, 'rgba(255, 235, 200, 0.04)');
@@ -263,7 +288,6 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
       ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, W, H);
 
-      // Light rays
       rays.forEach(ray => {
         const alpha = ray.alpha * (0.5 + 0.5 * Math.sin(time * ray.speed + ray.phase));
         const len = ray.length * (0.7 + 0.3 * Math.sin(time * ray.speed * 0.5 + ray.phase));
@@ -317,7 +341,7 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
     return () => cancelAnimationFrame(animFrameRef.current);
   }, [mode, imageLoaded, isSpeaking]);
 
-  // Video mode — dual-slot crossfade with last-8-frame protection
+  // Video mode — dual-slot crossfade
   if (mode === 'video') {
     return (
       <div className="absolute inset-0 w-full h-full bg-[#0a0e1a]">
@@ -327,8 +351,7 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
           playsInline
           className="absolute inset-0 w-full h-full object-cover object-top"
           style={{
-            opacity: opacityA,
-            transition: `opacity ${CROSSFADE_MS}ms ease-in-out`,
+            transition: `opacity ${CROSSFADE_MS}ms linear`,
             filter: 'brightness(1.05) contrast(1.02)',
           }}
         />
@@ -338,8 +361,7 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
           playsInline
           className="absolute inset-0 w-full h-full object-cover object-top"
           style={{
-            opacity: opacityB,
-            transition: `opacity ${CROSSFADE_MS}ms ease-in-out`,
+            transition: `opacity ${CROSSFADE_MS}ms linear`,
             filter: 'brightness(1.05) contrast(1.02)',
           }}
         />

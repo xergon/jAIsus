@@ -88,7 +88,7 @@ export function ChatInterface() {
     sendMessage({ text: transcript });
   }, [startProcessing, sendMessage]);
 
-  const { interimTranscript, isListening, isSupported, start: startRecognition, stop: stopRecognition } = useSpeechRecognition(handleVoiceResult);
+  const { interimTranscript, isListening, isSupported, error: voiceError, start: startRecognition, stop: stopRecognition } = useSpeechRecognition(handleVoiceResult);
 
   // Sync listening state
   useEffect(() => {
@@ -149,7 +149,12 @@ export function ChatInterface() {
 
         {/* Chat history section */}
         <div className="flex-1 px-4 py-2 space-y-3 overflow-y-auto border-t border-stone-200">
-          {messages.length === 0 && mounted && (
+          {voiceError && (
+            <div className="text-center py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-xs animate-fade-in">
+              {voiceError}
+            </div>
+          )}
+          {messages.length === 0 && mounted && !voiceError && (
             <div className="text-center py-4 text-stone-400">
               <p className="text-sm">Ask a question to begin your journey</p>
             </div>

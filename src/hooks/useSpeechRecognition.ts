@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 
-// Web Speech API types (not in default TS lib)
 interface SpeechRecognitionEvent extends Event {
   resultIndex: number;
   results: SpeechRecognitionResultList;
@@ -18,10 +17,12 @@ interface SpeechRecognitionInstance extends EventTarget {
   lang: string;
   start(): void;
   stop(): void;
+  abort(): void;
   onstart: ((this: SpeechRecognitionInstance, ev: Event) => void) | null;
   onresult: ((this: SpeechRecognitionInstance, ev: SpeechRecognitionEvent) => void) | null;
   onerror: ((this: SpeechRecognitionInstance, ev: SpeechRecognitionErrorEvent) => void) | null;
   onend: ((this: SpeechRecognitionInstance, ev: Event) => void) | null;
+  onspeechend: ((this: SpeechRecognitionInstance, ev: Event) => void) | null;
 }
 
 declare global {
@@ -36,6 +37,7 @@ interface SpeechRecognitionResult {
   interimTranscript: string;
   isListening: boolean;
   isSupported: boolean;
+  error: string | null;
   start: () => void;
   stop: () => void;
 }
@@ -47,21 +49,45 @@ export function useSpeechRecognition(
   const [interimTranscript, setInterimTranscript] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const onResultRef = useRef(onResult);
+
+  // Keep onResult ref updated without causing re-renders
+  useEffect(() => {
+    onResultRef.current = onResult;
+  }, [onResult]);
 
   useEffect(() => {
-    setIsSupported(
-      'SpeechRecognition' in window || 'webkitSpeechRecognition' in window
-    );
+    const supported = typeof window !== 'undefined' &&
+      ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+    setIsSupported(supported);
   }, []);
 
   const stop = useCallback(() => {
-    recognitionRef.current?.stop();
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      // May throw if already stopped
+    }
     setIsListening(false);
+    setInterimTranscript('');
   }, []);
 
   const start = useCallback(() => {
-    if (!isSupported) return;
+    if (!isSupported) {
+      setError('Speech recognition is not supported in this browser');
+      return;
+    }
+
+    // Stop any existing recognition
+    try {
+      recognitionRef.current?.abort();
+    } catch {
+      // Ignore
+    }
+
+    setError(null);
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
@@ -75,6 +101,7 @@ export function useSpeechRecognition(
       setIsListening(true);
       setTranscript('');
       setInterimTranscript('');
+      setError(null);
     };
 
     recognition.onresult = (event) => {
@@ -93,29 +120,47 @@ export function useSpeechRecognition(
       if (finalText) {
         setTranscript(finalText);
         setInterimTranscript('');
-        onResult?.(finalText);
+        onResultRef.current?.(finalText);
       } else {
         setInterimTranscript(interim);
       }
     };
 
     recognition.onerror = (event) => {
-      console.error('Speech recognition error:', event.error);
+      console.warn('Speech recognition error:', event.error);
+      if (event.error === 'not-allowed') {
+        setError('Microphone access denied. Please allow microphone access in your browser settings.');
+      } else if (event.error === 'no-speech') {
+        setError('No speech detected. Try again.');
+      } else if (event.error !== 'aborted') {
+        setError(`Recognition error: ${event.error}`);
+      }
       setIsListening(false);
+      setInterimTranscript('');
     };
 
     recognition.onend = () => {
       setIsListening(false);
     };
 
-    recognition.start();
-  }, [isSupported, onResult]);
+    try {
+      recognition.start();
+    } catch (err) {
+      console.warn('Failed to start recognition:', err);
+      setError('Failed to start speech recognition. Please try again.');
+      setIsListening(false);
+    }
+  }, [isSupported]);
 
   useEffect(() => {
     return () => {
-      recognitionRef.current?.stop();
+      try {
+        recognitionRef.current?.abort();
+      } catch {
+        // Ignore
+      }
     };
   }, []);
 
-  return { transcript, interimTranscript, isListening, isSupported, start, stop };
+  return { transcript, interimTranscript, isListening, isSupported, error, start, stop };
 }
