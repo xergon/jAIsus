@@ -28,8 +28,14 @@ export async function POST(req: Request) {
 
   if (!response.ok) {
     const error = await response.text();
-    console.error('ElevenLabs error:', error);
-    return Response.json({ error: 'TTS generation failed' }, { status: 500 });
+    console.error('ElevenLabs error:', response.status, error);
+    return Response.json({
+      error: 'TTS generation failed',
+      status: response.status,
+      detail: error.slice(0, 200),
+      keyPresent: !!apiKey,
+      keyPrefix: apiKey.slice(0, 6),
+    }, { status: 500 });
   }
 
   return new Response(response.body, {
