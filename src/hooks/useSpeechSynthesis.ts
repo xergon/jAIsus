@@ -148,6 +148,63 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
   return { speak, stop, isSpeaking };
 }
 
+/**
+ * Picks the best available voice for a warm, authoritative male sound.
+ * Priority order (highest first):
+ *  1. Premium/Enhanced macOS voices (Daniel Premium, Aaron, etc.)
+ *  2. Google high-quality voices (UK English Male)
+ *  3. Standard platform voices (Daniel, James, Fred)
+ *  4. Any English male voice
+ *  5. Any English voice
+ *  6. Default voice
+ */
+function pickBestVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
+  if (voices.length === 0) return null;
+
+  const englishVoices = voices.filter(v =>
+    v.lang.startsWith('en')
+  );
+
+  // Tier 1: Premium / Enhanced voices (macOS "Premium" or "Enhanced" variants)
+  const premium = englishVoices.find(v =>
+    /\b(Premium|Enhanced)\b/i.test(v.name) &&
+    /\b(Daniel|Aaron|James|Tom|Oliver)\b/i.test(v.name)
+  );
+  if (premium) return premium;
+
+  // Tier 2: Google high-quality voices
+  const googleMale = englishVoices.find(v =>
+    v.name.includes('Google UK English Male')
+  );
+  if (googleMale) return googleMale;
+
+  const googleUS = englishVoices.find(v =>
+    v.name.includes('Google US English')
+  );
+  if (googleUS) return googleUS;
+
+  // Tier 3: Well-known platform voices by name
+  const knownGood = ['Daniel', 'James', 'Aaron', 'Tom', 'Oliver', 'Arthur'];
+  for (const name of knownGood) {
+    const match = englishVoices.find(v => v.name.includes(name));
+    if (match) return match;
+  }
+
+  // Tier 4: Any English voice that sounds male (heuristic — lower pitch range)
+  // Just pick the first en-GB or en-US voice as a reasonable fallback
+  const enGB = englishVoices.find(v => v.lang === 'en-GB');
+  if (enGB) return enGB;
+
+  const enUS = englishVoices.find(v => v.lang === 'en-US');
+  if (enUS) return enUS;
+
+  // Tier 5: Any English voice at all
+  if (englishVoices.length > 0) return englishVoices[0];
+
+  // Tier 6: Whatever is available
+  return voices[0];
+}
+
 function speakWithBrowser(text: string, onEnd: () => void) {
   if (typeof window === 'undefined' || !window.speechSynthesis) {
     onEnd();
@@ -162,6 +219,12 @@ function speakWithBrowser(text: string, onEnd: () => void) {
     const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
     let index = 0;
 
+    const voices = window.speechSynthesis.getVoices();
+    const bestVoice = pickBestVoice(voices);
+    if (bestVoice) {
+      console.log('Using TTS voice:', bestVoice.name, bestVoice.lang);
+    }
+
     function speakNext() {
       if (index >= sentences.length) {
         onEnd();
@@ -169,19 +232,11 @@ function speakWithBrowser(text: string, onEnd: () => void) {
       }
 
       const utterance = new SpeechSynthesisUtterance(sentences[index].trim());
-      utterance.rate = 0.85;
-      utterance.pitch = 0.9;
+      utterance.rate = 0.88;
+      utterance.pitch = 0.85;
       utterance.volume = 1.0;
 
-      // Try to find a deep male voice
-      const voices = window.speechSynthesis.getVoices();
-      const preferred = voices.find(v =>
-        v.name.includes('Daniel') ||
-        v.name.includes('James') ||
-        v.name.includes('Aaron') ||
-        v.name.includes('Google UK English Male')
-      );
-      if (preferred) utterance.voice = preferred;
+      if (bestVoice) utterance.voice = bestVoice;
 
       utterance.onend = () => {
         index++;
@@ -190,7 +245,13 @@ function speakWithBrowser(text: string, onEnd: () => void) {
 
       utterance.onerror = (e) => {
         console.warn('Browser TTS error:', e);
-        onEnd();
+        // Try next sentence instead of giving up entirely
+        index++;
+        if (index < sentences.length) {
+          speakNext();
+        } else {
+          onEnd();
+        }
       };
 
       window.speechSynthesis.speak(utterance);

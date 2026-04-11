@@ -97,17 +97,19 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
     const vb = videoBRef.current;
     if (!va || !vb) return;
 
-    // Initialize: load first video into slot A, set opacities directly
+    // Initialize: slot A on top, playing. Slot B hidden behind.
     va.src = videos[0];
     va.load();
     va.style.opacity = '1';
-    vb.style.opacity = '0';
+    va.style.zIndex = '2'; // On top
+    vb.style.opacity = '1'; // Always full opacity — never partially transparent
+    vb.style.zIndex = '1'; // Behind
     activeSlotRef.current = 'A';
     currentIndexRef.current = 0;
     preloadedRef.current = false;
     transitioningRef.current = false;
 
-    // Try to autoplay — some browsers need this after load
+    // Try to autoplay
     va.play().catch(() => {});
 
     function getActiveVideo(): HTMLVideoElement | null {
@@ -128,6 +130,9 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
         inactive.src = nextSrc;
         inactive.load();
         inactive.setAttribute('data-src', nextSrc);
+        // Keep it at full opacity but behind the active video
+        inactive.style.opacity = '1';
+        inactive.style.zIndex = '1';
       }
     }
 
@@ -141,31 +146,40 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
       const outgoing = getActiveVideo();
 
       if (incoming) {
-        // CRITICAL: Set incoming to full opacity BEFORE starting playback
+        // Incoming is BEHIND the outgoing, already at full opacity.
+        // Start playing it so the first frame (still portrait) is rendered.
         incoming.style.opacity = '1';
+        incoming.style.zIndex = '1'; // Behind for now
         incoming.play().catch(() => {});
       }
 
-      // One frame later, fade out the outgoing video
-      // This ensures both videos overlap at full opacity = no black flash
+      // Wait 2 frames for the incoming video to render its first frame,
+      // then instantly swap z-index: incoming goes on top, outgoing goes behind.
+      // Both are at opacity 1 the entire time = ZERO brightness dip.
       requestAnimationFrame(() => {
-        if (outgoing) {
-          outgoing.style.opacity = '0';
-        }
+        requestAnimationFrame(() => {
+          if (incoming) {
+            incoming.style.zIndex = '2'; // Now on top
+          }
+          if (outgoing) {
+            outgoing.style.zIndex = '1'; // Now behind
+            // Pause after a tiny delay so the swap is visually complete
+            setTimeout(() => {
+              outgoing.pause();
+              outgoing.style.opacity = '0'; // Hide to save GPU compositing
+            }, 50);
+          }
+        });
       });
 
       // Swap active slot
       activeSlotRef.current = activeSlotRef.current === 'A' ? 'B' : 'A';
       preloadedRef.current = false;
 
-      // Allow next transition after crossfade + safety margin
+      // Allow next transition after swap settles
       setTimeout(() => {
         transitioningRef.current = false;
-        // Pause the now-hidden outgoing video to save resources
-        if (outgoing) {
-          outgoing.pause();
-        }
-      }, CROSSFADE_MS + 300);
+      }, 300);
     }
 
     function onTimeUpdate(this: HTMLVideoElement) {
@@ -351,7 +365,6 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
           playsInline
           className="absolute inset-0 w-full h-full object-cover object-top"
           style={{
-            transition: `opacity ${CROSSFADE_MS}ms linear`,
             filter: 'brightness(1.05) contrast(1.02)',
           }}
         />
@@ -361,7 +374,6 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
           playsInline
           className="absolute inset-0 w-full h-full object-cover object-top"
           style={{
-            transition: `opacity ${CROSSFADE_MS}ms linear`,
             filter: 'brightness(1.05) contrast(1.02)',
           }}
         />
