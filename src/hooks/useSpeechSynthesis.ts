@@ -9,19 +9,44 @@ interface SpeechSynthesisResult {
 }
 
 /**
- * Audio unlock: Mobile browsers block programmatic audio playback unless
- * there's been at least one user-gesture-triggered play(). We create a
- * silent Audio element on the first user touch/click to "unlock" the audio context.
+ * Audio unlock strategy:
+ *
+ * Chrome/Safari require a user gesture to start audio playback. We keep a
+ * persistent AudioContext and a reusable silent <audio> element. On first
+ * user interaction we resume the context and play silence to fully unlock
+ * both the Web Audio API and HTMLMediaElement playback paths.
+ *
+ * We also keep a persistent "warmed up" Audio element that has already
+ * called play() during a user gesture — this element can be reused for
+ * TTS playback without triggering the autoplay block.
  */
 let audioUnlocked = false;
+let persistentCtx: AudioContext | null = null;
+let warmAudio: HTMLAudioElement | null = null;
+
+function getAudioContext(): AudioContext {
+  if (!persistentCtx) {
+    const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    persistentCtx = new AC();
+  }
+  return persistentCtx;
+}
+
+/** Returns a "warm" Audio element that has been unlocked by a user gesture */
+function getWarmAudio(): HTMLAudioElement {
+  if (!warmAudio) {
+    warmAudio = new Audio();
+  }
+  return warmAudio;
+}
 
 function unlockAudio() {
   if (audioUnlocked) return;
   audioUnlocked = true;
 
-  // Play a silent audio to unlock the audio context
+  // Resume the persistent AudioContext
   try {
-    const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    const ctx = getAudioContext();
     const buf = ctx.createBuffer(1, 1, 22050);
     const src = ctx.createBufferSource();
     src.buffer = buf;
@@ -32,12 +57,16 @@ function unlockAudio() {
     // Ignore — best effort
   }
 
-  // Also try an Audio element
+  // Play silence on the warm Audio element to unlock HTMLMediaElement path
   try {
-    const audio = new Audio();
+    const audio = getWarmAudio();
     audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
     audio.volume = 0.01;
-    audio.play().then(() => audio.pause()).catch(() => {});
+    audio.play().then(() => {
+      audio.pause();
+      audio.src = '';
+      console.log('Audio element unlocked successfully');
+    }).catch(() => {});
   } catch {
     // Ignore
   }
@@ -73,6 +102,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
     abortRef.current?.abort();
     if (audioRef.current) {
       audioRef.current.pause();
+      audioRef.current.currentTime = 0;
       audioRef.current.src = '';
       audioRef.current = null;
     }
@@ -110,34 +140,76 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
 
       const blob = await response.blob();
       if (blob.size < 100) {
-        // Too small to be real audio
         console.warn('TTS response too small, falling back to browser');
         speakWithBrowser(text, () => setIsSpeaking(false));
         return;
       }
 
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
+      const blobUrl = URL.createObjectURL(blob);
+
+      // Use the warm (gesture-unlocked) audio element if available,
+      // otherwise fall back to a new Audio(). The warm element was
+      // play()-ed during a user gesture so Chrome trusts it.
+      const audio = getWarmAudio() || new Audio();
+      audio.src = blobUrl;
+      audio.volume = 1.0;
       audioRef.current = audio;
 
-      // Set volume explicitly
-      audio.volume = 1.0;
-
       audio.onended = () => {
-        URL.revokeObjectURL(url);
+        URL.revokeObjectURL(blobUrl);
         setIsSpeaking(false);
         audioRef.current = null;
+        // Reset src so it can be reused
+        audio.src = '';
       };
 
       audio.onerror = (e) => {
         console.warn('Audio playback error:', e);
-        URL.revokeObjectURL(url);
+        URL.revokeObjectURL(blobUrl);
         setIsSpeaking(false);
         audioRef.current = null;
+        audio.src = '';
         speakWithBrowser(text, () => setIsSpeaking(false));
       };
 
-      await audio.play();
+      // Resume AudioContext in case it got suspended
+      try {
+        const ctx = getAudioContext();
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+      } catch {
+        // non-critical
+      }
+
+      try {
+        await audio.play();
+        console.log('ElevenLabs TTS playing, size:', blob.size);
+      } catch (playErr) {
+        console.warn('play() blocked, trying with new Audio:', playErr);
+        // Fallback: create a fresh Audio element (sometimes works after context resume)
+        const fallback = new Audio(blobUrl);
+        fallback.volume = 1.0;
+        audioRef.current = fallback;
+        fallback.onended = () => {
+          URL.revokeObjectURL(blobUrl);
+          setIsSpeaking(false);
+          audioRef.current = null;
+        };
+        fallback.onerror = () => {
+          URL.revokeObjectURL(blobUrl);
+          setIsSpeaking(false);
+          audioRef.current = null;
+          speakWithBrowser(text, () => setIsSpeaking(false));
+        };
+        try {
+          await fallback.play();
+        } catch {
+          console.warn('All audio play attempts failed, falling back to browser TTS');
+          URL.revokeObjectURL(blobUrl);
+          speakWithBrowser(text, () => setIsSpeaking(false));
+        }
+      }
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
       console.warn('TTS error, falling back to browser:', err);
