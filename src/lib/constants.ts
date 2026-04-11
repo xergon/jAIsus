@@ -10,20 +10,21 @@ export const TEACHING_TOPICS = [
 ] as const;
 
 // ElevenLabs voice configuration
-// "Adam" — deep, warm, calm male voice perfect for spiritual guidance
-// Alternative premium voices to try:
+// Tested voices:
+//   "pNInz6obpgDQGcFmaJgB" — "Adam" — US accent (too American)
 //   "TX3LPaxmHKxFdv7VOQHJ" — "Liam" — warm British male
 //   "ErXwobaYiN019PkySvjV" — "Antoni" — deep calm male
-//   "VR6AewLTigWG4xSOukaG" — "Arnold" — deep authoritative
-export const ELEVENLABS_VOICE_ID = 'pNInz6obpgDQGcFmaJgB'; // "Adam"
+//   "JBFqnCBsd6RMkjVDRZzb" — "George" — warm British narrator
+//   "onwK4e9ZLuTAKqWW03F9" — "Daniel" — deep British, authoritative warmth
+export const ELEVENLABS_VOICE_ID = 'onwK4e9ZLuTAKqWW03F9'; // "Daniel" — deep British
 
 // Use the most expressive, highest-quality model
 export const ELEVENLABS_MODEL_ID = 'eleven_multilingual_v2';
 
-// Voice settings tuned for warm, calm, Jesus-like delivery
+// Voice settings tuned for warm, slightly loose, divine delivery
 export const TTS_SETTINGS = {
-  stability: 0.75,          // Higher = more consistent, calm
-  similarity_boost: 0.85,   // High fidelity to the base voice
-  style: 0.35,              // Moderate expressiveness
+  stability: 0.60,          // A bit lower = more expressive, slightly unpredictable (tipsy vibe)
+  similarity_boost: 0.80,   // High fidelity to voice
+  style: 0.45,              // Higher expressiveness for character
   use_speaker_boost: true,  // Clearer audio
 };
