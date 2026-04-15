@@ -7,15 +7,11 @@ interface AnimatedJesusProps {
 }
 
 /**
- * Photorealistic animated Jesus — full-bleed background with multi-video rotation.
+ * Photorealistic animated Jesus — full-bleed background.
  *
- * Uses refs + direct DOM manipulation for opacity to avoid React re-render
- * issues that cause dark flashes between crossfades.
- *
- * - Videos crossfade using dual video slots (A/B)
- * - Last 8 frames of each video are NEVER displayed
- * - Preloads next video at halfway point
- * - Falls back to static image or canvas if no videos available
+ * Uses a SINGLE video element to avoid Chrome memory crashes.
+ * Videos rotate by switching src after each clip ends.
+ * No crossfade = no dual decoders = no OOM crashes.
  */
 
 const VIDEO_PLAYLIST = [
@@ -28,24 +24,18 @@ const VIDEO_PLAYLIST = [
   '/jAisus_thumps_up.mp4',
 ];
 
-const SKIP_END_SECONDS = 0.35; // 8 frames at 24fps
-const CROSSFADE_MS = 167; // 4 frames at 24fps
+const SKIP_END_SECONDS = 0.35; // Skip last ~8 frames to avoid freeze-frame
 
 export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
-  const videoARef = useRef<HTMLVideoElement>(null);
-  const videoBRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number>(0);
   const [mode, setMode] = useState<'video' | 'image' | 'canvas'>('canvas');
   const [imageLoaded, setImageLoaded] = useState(false);
   const imageRef = useRef<HTMLImageElement | null>(null);
 
-  // ALL mutable playback state as refs — no React re-renders during playback
   const videosRef = useRef<string[]>([]);
-  const activeSlotRef = useRef<'A' | 'B'>('A');
   const currentIndexRef = useRef(0);
-  const transitioningRef = useRef(false);
-  const preloadedRef = useRef(false);
   const mountedRef = useRef(true);
 
   // Detect available videos on mount
@@ -87,203 +77,106 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
     return () => { mountedRef.current = false; };
   }, []);
 
-  // Video playback engine — runs once when mode becomes 'video'
+  // Single-element video playback engine
   useEffect(() => {
     if (mode !== 'video') return;
     const videos = videosRef.current;
     if (videos.length === 0) return;
 
-    const va = videoARef.current;
-    const vb = videoBRef.current;
-    if (!va || !vb) return;
+    const video = videoRef.current;
+    if (!video) return;
 
-    // Initialize: slot A on top, playing. Slot B hidden behind.
-    va.src = videos[0];
-    va.load();
-    va.style.opacity = '1';
-    va.style.zIndex = '2'; // On top
-    vb.style.opacity = '0'; // Hidden until first transition
-    vb.style.zIndex = '1'; // Behind
-    activeSlotRef.current = 'A';
     currentIndexRef.current = 0;
-    preloadedRef.current = false;
-    transitioningRef.current = false;
+    video.src = videos[0];
+    video.load();
+    video.play().catch(() => {});
 
-    // Try to autoplay
-    va.play().catch(() => {});
-
-    function getActiveVideo(): HTMLVideoElement {
-      return activeSlotRef.current === 'A' ? va! : vb!;
-    }
-
-    function getInactiveVideo(): HTMLVideoElement {
-      return activeSlotRef.current === 'A' ? vb! : va!;
-    }
-
-    function releaseVideo(el: HTMLVideoElement) {
-      // Fully release video resources to prevent memory buildup
-      el.pause();
-      el.removeAttribute('src');
-      el.load(); // Forces browser to release the decoder
-    }
-
-    function preloadNext() {
-      if (videos.length <= 1 || preloadedRef.current) return;
-      preloadedRef.current = true;
-      const nextIdx = (currentIndexRef.current + 1) % videos.length;
-      const nextSrc = videos[nextIdx];
-      const inactive = getInactiveVideo();
-      if (inactive.getAttribute('data-src') !== nextSrc) {
-        inactive.src = nextSrc;
-        inactive.load();
-        inactive.setAttribute('data-src', nextSrc);
-        inactive.style.opacity = '1';
-        inactive.style.zIndex = '1';
-      }
-    }
-
-    function transitionToNext() {
-      if (transitioningRef.current || videos.length === 0) return;
-      transitioningRef.current = true;
-
+    function playNext() {
+      if (!mountedRef.current || videos.length === 0) return;
       currentIndexRef.current = (currentIndexRef.current + 1) % videos.length;
-
-      const incoming = getInactiveVideo();
-      const outgoing = getActiveVideo();
-
-      // Incoming is BEHIND the outgoing, already at full opacity.
-      incoming.style.opacity = '1';
-      incoming.style.zIndex = '1';
-      incoming.play().catch((e) => {
-        console.warn('Video play failed:', e);
-        // If play fails, force transition anyway after timeout
-        setTimeout(() => { transitioningRef.current = false; }, 500);
+      video!.src = videos[currentIndexRef.current];
+      video!.load();
+      video!.play().catch(() => {
+        // If play fails, try again after a short delay
+        setTimeout(() => {
+          if (mountedRef.current) video!.play().catch(() => {});
+        }, 500);
       });
-
-      // Wait 2 frames for the incoming video to render, then swap z-index
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          if (!mountedRef.current) return;
-          incoming.style.zIndex = '2';
-          outgoing.style.zIndex = '1';
-          // Release outgoing video after swap is visually complete
-          setTimeout(() => {
-            outgoing.pause();
-            outgoing.style.opacity = '0';
-            // Release decoder memory — this is critical to prevent Chrome crashes
-            releaseVideo(outgoing);
-          }, 100);
-        });
-      });
-
-      activeSlotRef.current = activeSlotRef.current === 'A' ? 'B' : 'A';
-      preloadedRef.current = false;
-
-      setTimeout(() => {
-        transitioningRef.current = false;
-      }, 400);
     }
 
-    // Stall watchdog: if the active video hasn't progressed in 3 seconds, force-skip
-    let lastTime = 0;
-    let stallCount = 0;
-    const stallWatchdog = setInterval(() => {
-      if (!mountedRef.current) return;
-      const active = getActiveVideo();
-      if (active.paused && !transitioningRef.current) {
-        // Video stopped but we didn't transition — restart or skip
-        stallCount++;
-        if (stallCount > 1) {
-          console.warn('Video stalled, forcing transition');
-          transitionToNext();
-          stallCount = 0;
-        } else {
-          // Try to resume first
-          active.play().catch(() => transitionToNext());
-        }
-      } else if (active.currentTime === lastTime && !active.paused) {
-        // Playing but not progressing — stalled decoder
-        stallCount++;
-        if (stallCount > 2) {
-          console.warn('Video decoder stalled, skipping');
-          transitionToNext();
-          stallCount = 0;
-        }
-      } else {
-        stallCount = 0;
-      }
-      lastTime = active.currentTime;
-    }, 3000);
-
-    function onTimeUpdate(this: HTMLVideoElement) {
-      const video = this;
-      if (
-        (activeSlotRef.current === 'A' && video !== va) ||
-        (activeSlotRef.current === 'B' && video !== vb)
-      ) return;
-
-      if (!video.duration || video.duration === Infinity) return;
-      const remaining = video.duration - video.currentTime;
-
-      // Preload at 60% (gives more time to load)
-      if (video.currentTime > video.duration * 0.6) {
-        preloadNext();
-      }
-
-      // Skip last frames: pause + crossfade
-      if (remaining <= SKIP_END_SECONDS && !transitioningRef.current) {
-        video.pause();
-        transitionToNext();
+    function onTimeUpdate() {
+      if (!video!.duration || video!.duration === Infinity) return;
+      const remaining = video!.duration - video!.currentTime;
+      // Skip last frames to avoid freeze-frame at end
+      if (remaining <= SKIP_END_SECONDS) {
+        video!.pause();
+        playNext();
       }
     }
 
-    function onEnded(this: HTMLVideoElement) {
-      if (!transitioningRef.current) {
-        transitionToNext();
-      }
+    function onEnded() {
+      playNext();
     }
 
-    function onError(this: HTMLVideoElement) {
-      console.warn('Video error on', this.src?.split('/').pop(), ', skipping');
-      if (!transitioningRef.current) {
-        transitionToNext();
-      }
+    function onError() {
+      console.warn('Video error, skipping to next');
+      playNext();
     }
 
     // Handle tab visibility — pause when hidden, resume when visible
     function onVisibilityChange() {
       if (document.hidden) {
-        getActiveVideo().pause();
+        video!.pause();
       } else {
-        // Resume after returning to tab
-        const active = getActiveVideo();
-        if (active.src) {
-          active.play().catch(() => {});
+        if (video!.src) {
+          video!.play().catch(() => {});
         }
       }
     }
 
-    va.addEventListener('timeupdate', onTimeUpdate);
-    vb.addEventListener('timeupdate', onTimeUpdate);
-    va.addEventListener('ended', onEnded);
-    vb.addEventListener('ended', onEnded);
-    va.addEventListener('error', onError);
-    vb.addEventListener('error', onError);
+    // Stall watchdog: if video hasn't progressed in 4s, skip
+    let lastTime = 0;
+    let stallCount = 0;
+    const stallWatchdog = setInterval(() => {
+      if (!mountedRef.current) return;
+      if (video!.paused && !document.hidden) {
+        stallCount++;
+        if (stallCount > 1) {
+          console.warn('Video stalled, skipping');
+          playNext();
+          stallCount = 0;
+        } else {
+          video!.play().catch(() => playNext());
+        }
+      } else if (video!.currentTime === lastTime && !video!.paused) {
+        stallCount++;
+        if (stallCount > 2) {
+          console.warn('Video decoder stalled, skipping');
+          playNext();
+          stallCount = 0;
+        }
+      } else {
+        stallCount = 0;
+      }
+      lastTime = video!.currentTime;
+    }, 4000);
+
+    video.addEventListener('timeupdate', onTimeUpdate);
+    video.addEventListener('ended', onEnded);
+    video.addEventListener('error', onError);
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
       clearInterval(stallWatchdog);
-      va.removeEventListener('timeupdate', onTimeUpdate);
-      vb.removeEventListener('timeupdate', onTimeUpdate);
-      va.removeEventListener('ended', onEnded);
-      vb.removeEventListener('ended', onEnded);
-      va.removeEventListener('error', onError);
-      vb.removeEventListener('error', onError);
+      video.removeEventListener('timeupdate', onTimeUpdate);
+      video.removeEventListener('ended', onEnded);
+      video.removeEventListener('error', onError);
       document.removeEventListener('visibilitychange', onVisibilityChange);
-      releaseVideo(va);
-      releaseVideo(vb);
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
     };
-  }, [mode]); // Only re-run when mode changes
+  }, [mode]);
 
   // Canvas animation for image and fallback modes
   useEffect(() => {
@@ -400,21 +293,12 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
     return () => cancelAnimationFrame(animFrameRef.current);
   }, [mode, imageLoaded, isSpeaking]);
 
-  // Video mode — dual-slot crossfade
+  // Video mode — single element, no crossfade, no memory leaks
   if (mode === 'video') {
     return (
       <div className="absolute inset-0 w-full h-full bg-[#0a0e1a]">
         <video
-          ref={videoARef}
-          muted
-          playsInline
-          className="absolute inset-0 w-full h-full object-cover object-top"
-          style={{
-            filter: 'brightness(1.05) contrast(1.02)',
-          }}
-        />
-        <video
-          ref={videoBRef}
+          ref={videoRef}
           muted
           playsInline
           className="absolute inset-0 w-full h-full object-cover object-top"
