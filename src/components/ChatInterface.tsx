@@ -147,70 +147,116 @@ export function ChatInterface() {
         {/* Dark hero with title, visualizers, image */}
         <HeroSection voiceState={voiceState} interimTranscript={interimTranscript} />
 
-        {/* Action buttons (tabs, ask, features) */}
-        <ActionButtons
-          onAskQuestion={handleAskQuestion}
-          onOpenPanel={setActivePanel}
-        />
+        {/* Action buttons — hidden in voice-only mode */}
+        {!autoSpeak && (
+          <ActionButtons
+            onAskQuestion={handleAskQuestion}
+            onOpenPanel={setActivePanel}
+          />
+        )}
 
-        {/* Chat history section */}
-        <div className="flex-1 px-4 py-2 space-y-3 overflow-y-auto border-t border-stone-200">
-          {voiceError && (
-            <div className="text-center py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-xs animate-fade-in">
-              {voiceError}
-            </div>
-          )}
-          {messages.length === 0 && mounted && !voiceError && (
-            <div className="text-center py-4 text-stone-400">
-              <p className="text-sm">Ask a question to begin your journey</p>
-            </div>
-          )}
-          {messages.map(message => (
-            <ChatMessage
-              key={message.id}
-              message={message}
-              hidden={message.id === speakingMessageId && isSpeaking}
-            />
-          ))}
-          {status === 'submitted' && (
-            <div className="flex justify-start animate-fade-in">
-              <div className="bg-white border border-stone-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
-                <div className="flex gap-1.5">
-                  {[0, 1, 2].map(i => (
-                    <div
-                      key={i}
-                      className="w-2 h-2 rounded-full bg-teal-400 animate-bounce"
-                      style={{ animationDelay: `${i * 0.15}s` }}
-                    />
-                  ))}
+        {/* Voice-only mode: no chat text, just a floating mic and status */}
+        {autoSpeak ? (
+          <>
+            <div className="flex-1" />
+            {/* Status indicator overlay */}
+            <div className="px-4 py-3 text-center">
+              {voiceError && (
+                <div className="py-2 px-3 bg-amber-50/90 border border-amber-200 rounded-lg text-amber-700 text-xs mb-2">
+                  {voiceError}
                 </div>
+              )}
+              {(status === 'submitted' || status === 'streaming') && (
+                <div className="flex items-center justify-center gap-2 py-2 text-stone-400 text-xs">
+                  <div className="flex gap-1">
+                    {[0, 1, 2].map(i => (
+                      <div key={i} className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+                    ))}
+                  </div>
+                  <span>thinking...</span>
+                </div>
+              )}
+              {isSpeaking && (
+                <div className="flex items-center justify-center gap-2 py-2 text-amber-600 text-xs">
+                  <div className="flex gap-1">
+                    {[0, 1, 2, 3, 4].map(i => (
+                      <div key={i} className="w-1 rounded-full bg-amber-400 animate-pulse" style={{ height: `${8 + Math.random() * 8}px`, animationDelay: `${i * 0.15}s` }} />
+                    ))}
+                  </div>
+                  <span>speaking...</span>
+                </div>
+              )}
+            </div>
+            {/* Floating mic + optional text input toggle */}
+            <div className="sticky bottom-0 bg-transparent px-4 py-4">
+              <div className="flex items-center justify-center gap-3">
+                <VoiceButton
+                  voiceState={voiceState}
+                  onStart={handleVoiceToggle}
+                  onStop={handleVoiceToggle}
+                  isSupported={isSupported}
+                />
               </div>
             </div>
-          )}
-          <div ref={chatEndRef} />
-        </div>
+          </>
+        ) : (
+          <>
+            {/* Chat history section — only shown when autoSpeak is off */}
+            <div className="flex-1 px-4 py-2 space-y-3 overflow-y-auto border-t border-stone-200">
+              {voiceError && (
+                <div className="text-center py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-xs animate-fade-in">
+                  {voiceError}
+                </div>
+              )}
+              {messages.length === 0 && mounted && !voiceError && (
+                <div className="text-center py-4 text-stone-400">
+                  <p className="text-sm">Ask a question to begin your journey</p>
+                </div>
+              )}
+              {messages.map(message => (
+                <ChatMessage key={message.id} message={message} />
+              ))}
+              {status === 'submitted' && (
+                <div className="flex justify-start animate-fade-in">
+                  <div className="bg-white border border-stone-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
+                    <div className="flex gap-1.5">
+                      {[0, 1, 2].map(i => (
+                        <div
+                          key={i}
+                          className="w-2 h-2 rounded-full bg-teal-400 animate-bounce"
+                          style={{ animationDelay: `${i * 0.15}s` }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
 
-        {/* Input bar with floating mic */}
-        <div className="sticky bottom-0 bg-stone-50/95 backdrop-blur-sm border-t border-stone-200 px-4 py-3">
-          <form onSubmit={handleTextSubmit} className="flex items-center gap-2">
-            <input
-              type="text"
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              disabled={status !== 'ready'}
-              placeholder="Type your question..."
-              className="flex-1 rounded-full border border-stone-300 bg-white px-4 py-2.5 text-sm
-                focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent
-                disabled:opacity-50"
-            />
-            <VoiceButton
-              voiceState={voiceState}
-              onStart={handleVoiceToggle}
-              onStop={handleVoiceToggle}
-              isSupported={isSupported}
-            />
-          </form>
-        </div>
+            {/* Input bar — only in text mode */}
+            <div className="sticky bottom-0 bg-stone-50/95 backdrop-blur-sm border-t border-stone-200 px-4 py-3">
+              <form onSubmit={handleTextSubmit} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  disabled={status !== 'ready'}
+                  placeholder="Type your question..."
+                  className="flex-1 rounded-full border border-stone-300 bg-white px-4 py-2.5 text-sm
+                    focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent
+                    disabled:opacity-50"
+                />
+                <VoiceButton
+                  voiceState={voiceState}
+                  onStart={handleVoiceToggle}
+                  onStop={handleVoiceToggle}
+                  isSupported={isSupported}
+                />
+              </form>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Panels */}
