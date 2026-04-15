@@ -11,7 +11,7 @@ export async function POST(req: Request) {
     model: anthropic('claude-haiku-4-5-20251001'),
     system: SYSTEM_PROMPT,
     messages: await convertToModelMessages(messages),
-    maxTokens: 400, // Keep responses short for spoken delivery
+    maxOutputTokens: 400, // Keep responses short for spoken delivery
   });
 
   return result.toUIMessageStreamResponse();
