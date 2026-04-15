@@ -24,6 +24,7 @@ export function ChatInterface() {
   const [input, setInput] = useState('');
   const [activePanel, setActivePanel] = useState<ActivePanel>('none');
   const [autoSpeak, setAutoSpeak] = useState(true);
+  const [showTranscript, setShowTranscript] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -229,15 +230,53 @@ export function ChatInterface() {
                 </div>
               )}
             </div>
-            {/* Floating mic + optional text input toggle */}
+            {/* Transcript overlay */}
+            {showTranscript && messages.length > 0 && (
+              <div className="px-4 pb-2 max-h-48 overflow-y-auto">
+                <div className="bg-black/60 backdrop-blur-sm rounded-xl p-3 space-y-2">
+                  {messages.map(message => (
+                    <div key={message.id} className={`text-xs ${message.role === 'user' ? 'text-teal-300' : 'text-stone-200'}`}>
+                      <span className="font-bold">{message.role === 'user' ? 'You' : 'jAIsus'}:</span>{' '}
+                      {message.parts
+                        .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
+                        .map(p => p.text)
+                        .join('')}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Floating mic + settings + transcript buttons */}
             <div className="sticky bottom-0 bg-transparent px-4 py-4">
-              <div className="flex items-center justify-center gap-3">
+              <div className="flex items-center justify-center gap-4">
+                {/* Settings button */}
+                <button
+                  onClick={() => setActivePanel('settings')}
+                  className="w-10 h-10 rounded-full bg-white/15 backdrop-blur-sm flex items-center justify-center
+                    text-white/70 active:scale-95 transition-transform"
+                  aria-label="Settings"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                  </svg>
+                </button>
                 <VoiceButton
                   voiceState={voiceState}
                   onStart={handleVoiceToggle}
                   onStop={handleVoiceToggle}
                   isSupported={isSupported}
                 />
+                {/* Transcript toggle */}
+                <button
+                  onClick={() => setShowTranscript(!showTranscript)}
+                  className={`w-10 h-10 rounded-full backdrop-blur-sm flex items-center justify-center
+                    active:scale-95 transition-transform ${showTranscript ? 'bg-white/30 text-white' : 'bg-white/15 text-white/70'}`}
+                  aria-label="Show transcript"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                  </svg>
+                </button>
               </div>
             </div>
           </>
