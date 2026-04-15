@@ -31,7 +31,8 @@ export function ChatInterface() {
 
   const { loadMessages, saveMessages, clearHistory } = useChatHistory();
   const { voiceState, startListening, startProcessing, startSpeaking, reset } = useVoiceState();
-  const { speak, stop: stopSpeaking, isSpeaking } = useSpeechSynthesis();
+  const { speak, queueSentence, stop: stopSpeaking, isSpeaking } = useSpeechSynthesis();
+  const spokenLengthRef = useRef(0); // Track how much text we've already queued for TTS
 
   const { messages, sendMessage, status, setMessages } = useChat({
     transport,
@@ -53,27 +54,57 @@ export function ChatInterface() {
     }
   }, [messages, saveMessages, mounted]);
 
-  // Auto-speak AI responses when streaming completes
+  // Streaming TTS: feed sentences to the queue as they arrive during streaming
   useEffect(() => {
-    if (prevStatusRef.current === 'streaming' && status === 'ready' && autoSpeak && messages.length > 0) {
-      const lastMessage = messages[messages.length - 1];
-      if (lastMessage.role === 'assistant') {
-        const text = lastMessage.parts
-          .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
-          .map(p => p.text)
-          .join('');
-        if (text) {
-          setSpeakingMessageId(lastMessage.id);
-          startSpeaking();
-          speak(text).then(() => {
-            setSpeakingMessageId(null);
-            reset();
-          });
+    if (!autoSpeak || messages.length === 0) return;
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage.role !== 'assistant') return;
+
+    const fullText = lastMessage.parts
+      .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
+      .map(p => p.text)
+      .join('');
+
+    if (!fullText) return;
+
+    // When streaming starts, mark this message as speaking
+    if (status === 'streaming' && !speakingMessageId) {
+      setSpeakingMessageId(lastMessage.id);
+      startSpeaking();
+      spokenLengthRef.current = 0;
+    }
+
+    // Extract new sentences from the unprocessed portion
+    if (status === 'streaming' || (prevStatusRef.current === 'streaming' && status === 'ready')) {
+      const unprocessed = fullText.slice(spokenLengthRef.current);
+      // Match complete sentences (ending with . ! ? or ...)
+      const sentenceRegex = /[^.!?]+[.!?]+/g;
+      let match;
+      let lastEnd = 0;
+      while ((match = sentenceRegex.exec(unprocessed)) !== null) {
+        const sentence = match[0].trim();
+        if (sentence.length > 5) { // Skip very short fragments
+          queueSentence(sentence);
         }
+        lastEnd = match.index + match[0].length;
+      }
+      if (lastEnd > 0) {
+        spokenLengthRef.current += lastEnd;
       }
     }
+
+    // When streaming completes, flush any remaining text and signal end
+    if (prevStatusRef.current === 'streaming' && status === 'ready') {
+      const remaining = fullText.slice(spokenLengthRef.current).trim();
+      if (remaining.length > 5) {
+        queueSentence(remaining);
+      }
+      queueSentence(null); // Signal end of stream
+      spokenLengthRef.current = 0;
+    }
+
     prevStatusRef.current = status;
-  }, [status, messages, autoSpeak, speak, startSpeaking, reset]);
+  }, [status, messages, autoSpeak, queueSentence, speakingMessageId, startSpeaking]);
 
   // Update voice state when speaking state changes
   useEffect(() => {

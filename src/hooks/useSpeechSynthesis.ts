@@ -4,6 +4,8 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 
 interface SpeechSynthesisResult {
   speak: (text: string) => Promise<void>;
+  /** Queue a sentence for playback. Call with null to signal end of stream. */
+  queueSentence: (sentence: string | null) => void;
   stop: () => void;
   isSpeaking: boolean;
 }
@@ -86,6 +88,9 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const queueRef = useRef<string[]>([]);
+  const queueActiveRef = useRef(false);
+  const streamDoneRef = useRef(false);
 
   // Pre-load browser voices (needed on some browsers)
   useEffect(() => {
@@ -100,6 +105,10 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
+    // Clear the sentence queue
+    queueRef.current = [];
+    streamDoneRef.current = true;
+    queueActiveRef.current = false;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
@@ -217,7 +226,106 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
     }
   }, [stop]);
 
-  return { speak, stop, isSpeaking };
+  // --- Sentence queue for streaming TTS ---
+  // Plays sentences one by one as they arrive from the AI stream.
+  // Much lower latency than waiting for the full response.
+
+  const playOneSentence = useCallback(async (sentence: string): Promise<boolean> => {
+    unlockAudio();
+    try {
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: sentence }),
+        signal: controller.signal,
+      });
+      if (!response.ok) return false;
+      const blob = await response.blob();
+      if (blob.size < 100) return false;
+
+      const blobUrl = URL.createObjectURL(blob);
+      return new Promise<boolean>((resolve) => {
+        const audio = getWarmAudio() || new Audio();
+        audio.src = blobUrl;
+        audio.volume = 1.0;
+        audioRef.current = audio;
+
+        audio.onended = () => {
+          URL.revokeObjectURL(blobUrl);
+          audioRef.current = null;
+          audio.src = '';
+          resolve(true);
+        };
+        audio.onerror = () => {
+          URL.revokeObjectURL(blobUrl);
+          audioRef.current = null;
+          audio.src = '';
+          resolve(false);
+        };
+
+        // Resume AudioContext
+        try {
+          const ctx = getAudioContext();
+          if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+        } catch { /* */ }
+
+        audio.play().catch(() => {
+          // Try fallback
+          const fb = new Audio(blobUrl);
+          fb.volume = 1.0;
+          audioRef.current = fb;
+          fb.onended = () => { URL.revokeObjectURL(blobUrl); audioRef.current = null; resolve(true); };
+          fb.onerror = () => { URL.revokeObjectURL(blobUrl); audioRef.current = null; resolve(false); };
+          fb.play().catch(() => { URL.revokeObjectURL(blobUrl); resolve(false); });
+        });
+      });
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') return false;
+      return false;
+    }
+  }, []);
+
+  const processQueue = useCallback(async () => {
+    if (queueActiveRef.current) return;
+    queueActiveRef.current = true;
+    setIsSpeaking(true);
+
+    while (true) {
+      if (queueRef.current.length > 0) {
+        const sentence = queueRef.current.shift()!;
+        await playOneSentence(sentence);
+      } else if (streamDoneRef.current) {
+        // Stream ended and queue is empty — we're done
+        break;
+      } else {
+        // Queue empty but stream still going — wait a bit
+        await new Promise(r => setTimeout(r, 100));
+      }
+    }
+
+    queueActiveRef.current = false;
+    setIsSpeaking(false);
+  }, [playOneSentence]);
+
+  const queueSentence = useCallback((sentence: string | null) => {
+    if (sentence === null) {
+      // Signal end of stream
+      streamDoneRef.current = true;
+      return;
+    }
+    const trimmed = sentence.trim();
+    if (!trimmed) return;
+    queueRef.current.push(trimmed);
+    // Start processing if not already running
+    if (!queueActiveRef.current) {
+      streamDoneRef.current = false;
+      processQueue();
+    }
+  }, [processQueue]);
+
+  return { speak, queueSentence, stop, isSpeaking };
 }
 
 /**

@@ -18,8 +18,8 @@ export const TEACHING_TOPICS = [
 //   "onwK4e9ZLuTAKqWW03F9" — "Daniel" — deep British, authoritative warmth
 export const ELEVENLABS_VOICE_ID = 'onwK4e9ZLuTAKqWW03F9'; // "Daniel" — deep British
 
-// Use the most expressive, highest-quality model
-export const ELEVENLABS_MODEL_ID = 'eleven_multilingual_v2';
+// Flash model for ultra-low latency (~75ms vs ~300ms for multilingual_v2)
+export const ELEVENLABS_MODEL_ID = 'eleven_flash_v2_5';
 
 // Voice settings tuned for warm, slightly loose, divine delivery
 export const TTS_SETTINGS = {
