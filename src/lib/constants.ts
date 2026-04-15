@@ -9,14 +9,23 @@ export const TEACHING_TOPICS = [
   { id: 'wisdom', label: 'Wisdom', icon: '📖' },
 ] as const;
 
-// ElevenLabs voice configuration
-// Tested voices:
-//   "pNInz6obpgDQGcFmaJgB" — "Adam" — US accent (too American)
-//   "TX3LPaxmHKxFdv7VOQHJ" — "Liam" — warm British male
-//   "ErXwobaYiN019PkySvjV" — "Antoni" — deep calm male
-//   "JBFqnCBsd6RMkjVDRZzb" — "George" — warm British narrator
-//   "onwK4e9ZLuTAKqWW03F9" — "Daniel" — deep British, authoritative warmth
-export const ELEVENLABS_VOICE_ID = 'onwK4e9ZLuTAKqWW03F9'; // "Daniel" — deep British
+// ElevenLabs voice options for settings dropdown
+export const VOICE_OPTIONS = [
+  { id: 'onwK4e9ZLuTAKqWW03F9', name: 'Daniel', desc: 'Deep British' },
+  { id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George', desc: 'Warm narrator' },
+  { id: 'cjVigY5qzO86Huf0OWal', name: 'Eric', desc: 'Calm, gentle' },
+  { id: 'GBv7mTt0atIp3Br8iCZE', name: 'Callum', desc: 'Transatlantic' },
+  { id: 'N2lVS1w4EtoT3dr4eOWO', name: 'Callum II', desc: 'Deep warm' },
+  { id: 'pqHfZKP75CvOlQylNhV4', name: 'Bill', desc: 'Deep, wise' },
+  { id: 'IKne3meq5aSn9XLyUdCD', name: 'Charlie', desc: 'Warm Australian' },
+  { id: 'D38z5RcWu1voky8WS1ja', name: 'Fin', desc: 'Irish warmth' },
+  { id: 'SAz9YHcvj6GT2YYXdXww', name: 'River', desc: 'Calm American' },
+  { id: 'iP95p4xoKVk53GoZ742B', name: 'Chris', desc: 'Casual warm' },
+  { id: 'TX3LPaxmHKxFdv7VOQHJ', name: 'Liam', desc: 'Warm British' },
+  { id: 'ErXwobaYiN019PkySvjV', name: 'Antoni', desc: 'Deep calm' },
+] as const;
+
+export const DEFAULT_VOICE_ID = 'onwK4e9ZLuTAKqWW03F9'; // Daniel
 
 // Flash model for ultra-low latency (~75ms vs ~300ms for multilingual_v2)
 export const ELEVENLABS_MODEL_ID = 'eleven_flash_v2_5';

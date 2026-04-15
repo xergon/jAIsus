@@ -10,6 +10,16 @@ interface SpeechSynthesisResult {
   isSpeaking: boolean;
 }
 
+// Voice ID is stored in localStorage so it persists across sessions
+function getStoredVoiceId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try { return localStorage.getItem('jaisus-voice-id'); } catch { return null; }
+}
+export function setStoredVoiceId(id: string) {
+  if (typeof window === 'undefined') return;
+  try { localStorage.setItem('jaisus-voice-id', id); } catch { /* */ }
+}
+
 /**
  * Audio unlock strategy:
  *
@@ -137,7 +147,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       const response = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: text.slice(0, 2000) }), // Limit text length
+        body: JSON.stringify({ text: text.slice(0, 2000), voiceId: getStoredVoiceId() }), // Limit text length
         signal: controller.signal,
       });
 
@@ -238,7 +248,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       const response = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: sentence }),
+        body: JSON.stringify({ text: sentence, voiceId: getStoredVoiceId() }),
         signal: controller.signal,
       });
       if (!response.ok) return false;

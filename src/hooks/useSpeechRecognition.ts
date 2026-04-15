@@ -25,14 +25,13 @@ interface SpeechRecognitionInstance extends EventTarget {
   onspeechend: ((this: SpeechRecognitionInstance, ev: Event) => void) | null;
 }
 
-declare global {
-  interface Window {
-    SpeechRecognition: new () => SpeechRecognitionInstance;
-    webkitSpeechRecognition: new () => SpeechRecognitionInstance;
-  }
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+interface WindowWithSpeech {
+  SpeechRecognition?: new () => SpeechRecognitionInstance;
+  webkitSpeechRecognition?: new () => SpeechRecognitionInstance;
 }
 
-interface SpeechRecognitionResult {
+interface SpeechRecognitionHookResult {
   transcript: string;
   interimTranscript: string;
   isListening: boolean;
@@ -44,7 +43,7 @@ interface SpeechRecognitionResult {
 
 export function useSpeechRecognition(
   onResult?: (transcript: string) => void
-): SpeechRecognitionResult {
+): SpeechRecognitionHookResult {
   const [transcript, setTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
   const [isListening, setIsListening] = useState(false);
@@ -61,8 +60,9 @@ export function useSpeechRecognition(
   }, [onResult]);
 
   useEffect(() => {
+    const w = window as unknown as WindowWithSpeech;
     const supported = typeof window !== 'undefined' &&
-      ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+      (!!w.SpeechRecognition || !!w.webkitSpeechRecognition);
     setIsSupported(supported);
   }, []);
 
@@ -100,7 +100,9 @@ export function useSpeechRecognition(
 
     setError(null);
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const w = window as unknown as WindowWithSpeech;
+    const SpeechRecognition = w.SpeechRecognition || w.webkitSpeechRecognition;
+    if (!SpeechRecognition) { setError('Speech recognition not available'); return; }
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
 

@@ -1,17 +1,21 @@
-import { ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID, TTS_SETTINGS } from '@/lib/constants';
+import { DEFAULT_VOICE_ID, VOICE_OPTIONS, ELEVENLABS_MODEL_ID, TTS_SETTINGS } from '@/lib/constants';
 
 export const maxDuration = 30;
 
 export async function POST(req: Request) {
-  const { text }: { text: string } = await req.json();
+  const { text, voiceId }: { text: string; voiceId?: string } = await req.json();
 
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     return Response.json({ error: 'ElevenLabs API key not configured' }, { status: 500 });
   }
 
+  // Validate voice ID — only allow known voices
+  const validIds = VOICE_OPTIONS.map(v => v.id) as readonly string[];
+  const selectedVoice = voiceId && validIds.includes(voiceId) ? voiceId : DEFAULT_VOICE_ID;
+
   const response = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
+    `https://api.elevenlabs.io/v1/text-to-speech/${selectedVoice}`,
     {
       method: 'POST',
       headers: {

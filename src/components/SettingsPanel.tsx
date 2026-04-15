@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { VOICE_OPTIONS, DEFAULT_VOICE_ID } from '@/lib/constants';
+import { setStoredVoiceId } from '@/hooks/useSpeechSynthesis';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -8,6 +10,7 @@ interface SettingsPanelProps {
   autoSpeak: boolean;
   onToggleAutoSpeak: () => void;
   onClearHistory: () => void;
+  onTestVoice?: (voiceId: string) => void;
 }
 
 export function SettingsPanel({
@@ -16,8 +19,35 @@ export function SettingsPanel({
   autoSpeak,
   onToggleAutoSpeak,
   onClearHistory,
+  onTestVoice,
 }: SettingsPanelProps) {
   const [cleared, setCleared] = useState(false);
+  const [selectedVoice, setSelectedVoice] = useState(DEFAULT_VOICE_ID);
+  const [testing, setTesting] = useState(false);
+
+  // Load saved voice on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('jaisus-voice-id');
+        if (saved) setSelectedVoice(saved);
+      } catch { /* */ }
+    }
+  }, []);
+
+  function handleVoiceChange(voiceId: string) {
+    setSelectedVoice(voiceId);
+    setStoredVoiceId(voiceId);
+  }
+
+  async function handleTestVoice() {
+    if (testing) return;
+    setTesting(true);
+    if (onTestVoice) {
+      onTestVoice(selectedVoice);
+    }
+    setTimeout(() => setTesting(false), 3000);
+  }
 
   function handleClear() {
     onClearHistory();
@@ -56,6 +86,33 @@ export function SettingsPanel({
                 }`}
               />
             </button>
+          </div>
+
+          {/* Voice selection */}
+          <div>
+            <p className="text-sm font-medium text-stone-800 mb-1.5">Voice</p>
+            <div className="flex gap-2">
+              <select
+                value={selectedVoice}
+                onChange={e => handleVoiceChange(e.target.value)}
+                className="flex-1 rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-800
+                  focus:outline-none focus:ring-2 focus:ring-teal-400"
+              >
+                {VOICE_OPTIONS.map(v => (
+                  <option key={v.id} value={v.id}>
+                    {v.name} — {v.desc}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleTestVoice}
+                disabled={testing}
+                className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-medium text-teal-700
+                  active:scale-[0.98] transition-transform disabled:opacity-50"
+              >
+                {testing ? '...' : 'Test'}
+              </button>
+            </div>
           </div>
 
           {/* Clear chat history */}

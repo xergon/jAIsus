@@ -127,6 +127,13 @@ export function ChatInterface() {
 
   const { interimTranscript, isListening, isSupported, error: voiceError, start: startRecognition, stop: stopRecognition } = useSpeechRecognition(handleVoiceResult);
 
+  // Stop mic when TTS starts speaking to prevent self-listening loop
+  useEffect(() => {
+    if (isSpeaking && isListening) {
+      stopRecognition();
+    }
+  }, [isSpeaking, isListening, stopRecognition]);
+
   // Sync listening state
   useEffect(() => {
     if (isListening) {
@@ -159,9 +166,13 @@ export function ChatInterface() {
   function handleVoiceToggle() {
     if (voiceState === 'listening') {
       stopRecognition();
-    } else if (voiceState === 'speaking') {
+    } else if (voiceState === 'speaking' || isSpeaking) {
+      // Interrupt: stop TTS and immediately start listening
       stopSpeaking();
+      setSpeakingMessageId(null);
       reset();
+      // Small delay to let audio fully stop before opening mic
+      setTimeout(() => startRecognition(), 150);
     } else {
       startRecognition();
     }
@@ -313,6 +324,7 @@ export function ChatInterface() {
         autoSpeak={autoSpeak}
         onToggleAutoSpeak={() => setAutoSpeak(!autoSpeak)}
         onClearHistory={handleClearHistory}
+        onTestVoice={() => speak('Peace be with you, my friend. I have walked among you for two thousand years.')}
       />
       <CommunityPlaceholder
         isOpen={activePanel === 'community'}
