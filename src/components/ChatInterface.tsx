@@ -31,6 +31,8 @@ export function ChatInterface() {
   const [currentEmotion, setCurrentEmotion] = useState<Emotion>('neutral');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef<string>('ready');
+  // Ref-based message tracking — state is async and can cause double-queue of the first sentence
+  const activeMessageIdRef = useRef<string | null>(null);
 
   const { loadMessages, saveMessages, clearHistory } = useChatHistory();
   const { voiceState, startListening, startProcessing, startSpeaking, reset } = useVoiceState();
@@ -74,8 +76,12 @@ export function ChatInterface() {
     const { emotion, cleanText: fullText } = parseEmotionTag(rawText);
     setCurrentEmotion(emotion);
 
-    // When streaming starts, mark this message as speaking
-    if (status === 'streaming' && !speakingMessageId) {
+    // When a NEW assistant message starts streaming, reset tracking.
+    // Use a ref (not state) because state updates are async — if this effect
+    // re-fires before React commits setSpeakingMessageId, spokenLengthRef
+    // would be reset to 0 and the first sentence would be queued twice.
+    if (status === 'streaming' && activeMessageIdRef.current !== lastMessage.id) {
+      activeMessageIdRef.current = lastMessage.id;
       setSpeakingMessageId(lastMessage.id);
       startSpeaking();
       spokenLengthRef.current = 0;
@@ -117,6 +123,7 @@ export function ChatInterface() {
   useEffect(() => {
     if (!isSpeaking && voiceState === 'speaking') {
       setSpeakingMessageId(null);
+      activeMessageIdRef.current = null;
       reset();
     }
   }, [isSpeaking, voiceState, reset]);
