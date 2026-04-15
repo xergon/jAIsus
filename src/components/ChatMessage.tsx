@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import type { UIMessage } from 'ai';
+import { parseEmotionTag } from '@/lib/emotions';
 
 interface ChatMessageProps {
   message: UIMessage;
@@ -12,10 +13,13 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const [expanded, setExpanded] = useState(false);
 
-  const textContent = message.parts
+  const rawText = message.parts
     .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
     .map(part => part.text)
     .join('');
+
+  // Strip emotion tags from assistant messages
+  const textContent = !isUser ? parseEmotionTag(rawText).cleanText : rawText;
 
   if (!textContent) return null;
 

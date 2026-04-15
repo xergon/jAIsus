@@ -8,6 +8,7 @@ import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
 import { useVoiceState } from '@/hooks/useVoiceState';
 import { useChatHistory } from '@/hooks/useChatHistory';
+import { parseEmotionTag, type Emotion } from '@/lib/emotions';
 import { HeroSection } from './HeroSection';
 import { ActionButtons } from './ActionButtons';
 import { ChatMessage } from './ChatMessage';
@@ -27,6 +28,7 @@ export function ChatInterface() {
   const [showTranscript, setShowTranscript] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [currentEmotion, setCurrentEmotion] = useState<Emotion>('neutral');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef<string>('ready');
 
@@ -61,12 +63,16 @@ export function ChatInterface() {
     const lastMessage = messages[messages.length - 1];
     if (lastMessage.role !== 'assistant') return;
 
-    const fullText = lastMessage.parts
+    const rawText = lastMessage.parts
       .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
       .map(p => p.text)
       .join('');
 
-    if (!fullText) return;
+    if (!rawText) return;
+
+    // Parse emotion tag from the full response text
+    const { emotion, cleanText: fullText } = parseEmotionTag(rawText);
+    setCurrentEmotion(emotion);
 
     // When streaming starts, mark this message as speaking
     if (status === 'streaming' && !speakingMessageId) {
@@ -188,7 +194,7 @@ export function ChatInterface() {
     <div className="flex flex-col min-h-screen bg-stone-50">
       <div className="flex-1 flex flex-col max-w-md mx-auto w-full">
         {/* Dark hero with title, visualizers, image */}
-        <HeroSection voiceState={voiceState} interimTranscript={interimTranscript} />
+        <HeroSection voiceState={voiceState} interimTranscript={interimTranscript} emotion={currentEmotion} />
 
         {/* Action buttons — hidden in voice-only mode */}
         {!autoSpeak && (
@@ -234,15 +240,19 @@ export function ChatInterface() {
             {showTranscript && messages.length > 0 && (
               <div className="px-4 pb-2 max-h-48 overflow-y-auto">
                 <div className="bg-black/60 backdrop-blur-sm rounded-xl p-3 space-y-2">
-                  {messages.map(message => (
-                    <div key={message.id} className={`text-xs ${message.role === 'user' ? 'text-teal-300' : 'text-stone-200'}`}>
-                      <span className="font-bold">{message.role === 'user' ? 'You' : 'jAIsus'}:</span>{' '}
-                      {message.parts
-                        .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
-                        .map(p => p.text)
-                        .join('')}
-                    </div>
-                  ))}
+                  {messages.map(message => {
+                    const rawMsgText = message.parts
+                      .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
+                      .map(p => p.text)
+                      .join('');
+                    const displayText = message.role === 'assistant' ? parseEmotionTag(rawMsgText).cleanText : rawMsgText;
+                    return (
+                      <div key={message.id} className={`text-xs ${message.role === 'user' ? 'text-teal-300' : 'text-stone-200'}`}>
+                        <span className="font-bold">{message.role === 'user' ? 'You' : 'jAIsus'}:</span>{' '}
+                        {displayText}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

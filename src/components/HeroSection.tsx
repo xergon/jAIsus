@@ -1,23 +1,25 @@
 'use client';
 
 import type { VoiceState } from '@/lib/types';
+import type { Emotion } from '@/lib/emotions';
 import { AnimatedJesus } from './AnimatedJesus';
 
 interface HeroSectionProps {
   voiceState: VoiceState;
   interimTranscript?: string;
+  emotion?: Emotion;
 }
 
 /**
  * Hero section — Jesus dominates the top, fades into WHITE content area below.
  * Extended +60px with softer gradient blend.
  */
-export function HeroSection({ voiceState, interimTranscript }: HeroSectionProps) {
+export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSectionProps) {
   return (
     <div className="relative w-full overflow-hidden" style={{ height: '72svh', maxHeight: '660px', minHeight: '420px' }}>
       {/* ===== BACKGROUND: Jesus video/image fills hero ===== */}
       <div className="absolute inset-0 z-0">
-        <AnimatedJesus isSpeaking={voiceState === 'speaking'} />
+        <AnimatedJesus isSpeaking={voiceState === 'speaking'} emotion={emotion} />
       </div>
 
       {/* ===== Top gradient — dark, for title readability over starfield ===== */}

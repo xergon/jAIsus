@@ -1,9 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { EMOTION_VIDEO_MAP, type Emotion } from '@/lib/emotions';
 
 interface AnimatedJesusProps {
   isSpeaking?: boolean;
+  emotion?: Emotion;
 }
 
 /**
@@ -28,7 +30,7 @@ const VIDEO_PLAYLIST = [
 
 const SKIP_END_SECONDS = 0.35;
 
-export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
+export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: AnimatedJesusProps) {
   const videoARef = useRef<HTMLVideoElement>(null);
   const videoBRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -42,6 +44,22 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
   const currentIndexRef = useRef(0);
   const preloadedRef = useRef(false);
   const mountedRef = useRef(true);
+  const emotionRequestRef = useRef<string | null>(null);
+  const lastEmotionRef = useRef<Emotion>('neutral');
+
+  // When emotion changes, request the matching video
+  useEffect(() => {
+    if (emotion === lastEmotionRef.current) return;
+    lastEmotionRef.current = emotion;
+    const preferred = EMOTION_VIDEO_MAP[emotion] || EMOTION_VIDEO_MAP.neutral;
+    const available = videosRef.current;
+    if (available.length === 0) return;
+    // Find the first preferred video that's available
+    const match = preferred.find(v => available.includes(v));
+    if (match) {
+      emotionRequestRef.current = match;
+    }
+  }, [emotion]);
 
   // Detect available videos on mount
   useEffect(() => {
@@ -125,7 +143,20 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
 
     function swapToNext() {
       if (videos.length === 0) return;
-      currentIndexRef.current = (currentIndexRef.current + 1) % videos.length;
+
+      // Check if there's an emotion-requested video
+      const emotionReq = emotionRequestRef.current;
+      if (emotionReq) {
+        const reqIndex = videos.indexOf(emotionReq);
+        if (reqIndex !== -1 && reqIndex !== currentIndexRef.current) {
+          currentIndexRef.current = reqIndex;
+        } else {
+          currentIndexRef.current = (currentIndexRef.current + 1) % videos.length;
+        }
+        emotionRequestRef.current = null;
+      } else {
+        currentIndexRef.current = (currentIndexRef.current + 1) % videos.length;
+      }
 
       const next = getNext();
       const current = getActive();
@@ -159,6 +190,20 @@ export function AnimatedJesus({ isSpeaking = false }: AnimatedJesusProps) {
 
       const progress = this.currentTime / this.duration;
       const remaining = this.duration - this.currentTime;
+
+      // If an emotion-matched video is requested, swap soon (after at least 1s of current)
+      if (emotionRequestRef.current && this.currentTime > 1.0) {
+        const reqVideo = emotionRequestRef.current;
+        const reqIndex = videos.indexOf(reqVideo);
+        // Only interrupt if the requested video is different from current
+        if (reqIndex !== -1 && reqIndex !== currentIndexRef.current) {
+          this.pause();
+          swapToNext();
+          return;
+        } else {
+          emotionRequestRef.current = null; // Same video, clear request
+        }
+      }
 
       // Preload at 80%
       if (progress > 0.8) {
