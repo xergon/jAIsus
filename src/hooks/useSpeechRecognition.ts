@@ -52,6 +52,8 @@ export function useSpeechRecognition(
   const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const onResultRef = useRef(onResult);
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastInterimRef = useRef<string>('');
 
   // Keep onResult ref updated without causing re-renders
   useEffect(() => {
@@ -64,7 +66,15 @@ export function useSpeechRecognition(
     setIsSupported(supported);
   }, []);
 
+  const clearSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+  }, []);
+
   const stop = useCallback(() => {
+    clearSilenceTimer();
     try {
       recognitionRef.current?.stop();
     } catch {
@@ -72,7 +82,8 @@ export function useSpeechRecognition(
     }
     setIsListening(false);
     setInterimTranscript('');
-  }, []);
+    lastInterimRef.current = '';
+  }, [clearSilenceTimer]);
 
   const start = useCallback(() => {
     if (!isSupported) {
@@ -118,11 +129,31 @@ export function useSpeechRecognition(
       }
 
       if (finalText) {
+        clearSilenceTimer();
+        lastInterimRef.current = '';
         setTranscript(finalText);
         setInterimTranscript('');
         onResultRef.current?.(finalText);
       } else {
         setInterimTranscript(interim);
+        lastInterimRef.current = interim;
+
+        // Custom silence timeout: if no new results for 1.2s, force-submit
+        // the interim text. Much faster than the browser's default ~3-4s.
+        clearSilenceTimer();
+        if (interim.trim().length > 0) {
+          silenceTimerRef.current = setTimeout(() => {
+            const text = lastInterimRef.current.trim();
+            if (text) {
+              lastInterimRef.current = '';
+              setTranscript(text);
+              setInterimTranscript('');
+              onResultRef.current?.(text);
+              // Stop recognition since we're submitting
+              try { recognition.stop(); } catch { /* */ }
+            }
+          }, 1200);
+        }
       }
     };
 
@@ -140,6 +171,7 @@ export function useSpeechRecognition(
     };
 
     recognition.onend = () => {
+      clearSilenceTimer();
       setIsListening(false);
     };
 
@@ -150,17 +182,18 @@ export function useSpeechRecognition(
       setError('Failed to start speech recognition. Please try again.');
       setIsListening(false);
     }
-  }, [isSupported]);
+  }, [isSupported, clearSilenceTimer]);
 
   useEffect(() => {
     return () => {
+      clearSilenceTimer();
       try {
         recognitionRef.current?.abort();
       } catch {
         // Ignore
       }
     };
-  }, []);
+  }, [clearSilenceTimer]);
 
   return { transcript, interimTranscript, isListening, isSupported, error, start, stop };
 }
