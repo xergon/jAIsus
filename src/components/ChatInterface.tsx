@@ -8,7 +8,7 @@ import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
 import { useVoiceState } from '@/hooks/useVoiceState';
 import { useChatHistory } from '@/hooks/useChatHistory';
-import { parseEmotionTag, type Emotion } from '@/lib/emotions';
+import { parseEmotionTag, stripAllEmotionTags, type Emotion } from '@/lib/emotions';
 import { HeroSection } from './HeroSection';
 import { ActionButtons } from './ActionButtons';
 import { ChatMessage } from './ChatMessage';
@@ -72,10 +72,6 @@ export function ChatInterface() {
 
     if (!rawText) return;
 
-    // Parse emotion tag from the full response text
-    const { emotion, cleanText: fullText } = parseEmotionTag(rawText);
-    setCurrentEmotion(emotion);
-
     // When a NEW assistant message starts streaming, reset tracking.
     // Use a ref (not state) because state updates are async — if this effect
     // re-fires before React commits setSpeakingMessageId, spokenLengthRef
@@ -87,17 +83,22 @@ export function ChatInterface() {
       spokenLengthRef.current = 0;
     }
 
-    // Extract new sentences from the unprocessed portion
+    // Extract new sentences from the unprocessed RAW text (including emotion tags).
+    // We track position in the RAW text so tag-length changes don't cause drift.
     if (status === 'streaming' || (prevStatusRef.current === 'streaming' && status === 'ready')) {
-      const unprocessed = fullText.slice(spokenLengthRef.current);
-      // Match complete sentences (ending with . ! ? or ...)
-      const sentenceRegex = /[^.!?]+[.!?]+/g;
+      const unprocessed = rawText.slice(spokenLengthRef.current);
+      // Match: optional emotion tag + sentence content + punctuation
+      const sentenceRegex = /(?:\[EMOTION:\w+\]\s*)?[^.!?\[\]]+[.!?]+/g;
       let match;
       let lastEnd = 0;
       while ((match = sentenceRegex.exec(unprocessed)) !== null) {
-        const sentence = match[0].trim();
-        if (sentence.length > 5) { // Skip very short fragments
-          queueSentence(sentence);
+        const rawSentence = match[0];
+        // Parse per-sentence emotion and strip the tag for TTS
+        const { emotion, cleanText } = parseEmotionTag(rawSentence);
+        const trimmed = cleanText.trim();
+        if (trimmed.length > 5) {
+          setCurrentEmotion(emotion);
+          queueSentence(trimmed);
         }
         lastEnd = match.index + match[0].length;
       }
@@ -108,9 +109,14 @@ export function ChatInterface() {
 
     // When streaming completes, flush any remaining text and signal end
     if (prevStatusRef.current === 'streaming' && status === 'ready') {
-      const remaining = fullText.slice(spokenLengthRef.current).trim();
+      const remaining = rawText.slice(spokenLengthRef.current).trim();
       if (remaining.length > 5) {
-        queueSentence(remaining);
+        const { emotion, cleanText } = parseEmotionTag(remaining);
+        const trimmed = cleanText.trim();
+        if (trimmed.length > 5) {
+          setCurrentEmotion(emotion);
+          queueSentence(trimmed);
+        }
       }
       queueSentence(null); // Signal end of stream
       spokenLengthRef.current = 0;
@@ -252,7 +258,7 @@ export function ChatInterface() {
                       .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
                       .map(p => p.text)
                       .join('');
-                    const displayText = message.role === 'assistant' ? parseEmotionTag(rawMsgText).cleanText : rawMsgText;
+                    const displayText = message.role === 'assistant' ? stripAllEmotionTags(rawMsgText).cleanText : rawMsgText;
                     return (
                       <div key={message.id} className={`text-xs ${message.role === 'user' ? 'text-teal-300' : 'text-stone-200'}`}>
                         <span className="font-bold">{message.role === 'user' ? 'You' : 'jAIsus'}:</span>{' '}

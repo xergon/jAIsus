@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { UIMessage } from 'ai';
-import { parseEmotionTag } from '@/lib/emotions';
+import { stripAllEmotionTags } from '@/lib/emotions';
 
 interface ChatMessageProps {
   message: UIMessage;
@@ -18,8 +18,8 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
     .map(part => part.text)
     .join('');
 
-  // Strip emotion tags from assistant messages
-  const textContent = !isUser ? parseEmotionTag(rawText).cleanText : rawText;
+  // Strip all per-sentence emotion tags from assistant messages
+  const textContent = !isUser ? stripAllEmotionTags(rawText).cleanText : rawText;
 
   if (!textContent) return null;
 

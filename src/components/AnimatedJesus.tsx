@@ -28,7 +28,8 @@ const VIDEO_PLAYLIST = [
   '/jAisus_thumps_up.mp4',
 ];
 
-const SKIP_END_SECONDS = 0.35;
+// Skip last 8 frames (~0.27s at 30fps) to avoid the freeze/glitch at clip end
+const SKIP_END_SECONDS = 0.27;
 
 export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: AnimatedJesusProps) {
   const videoARef = useRef<HTMLVideoElement>(null);
@@ -133,7 +134,14 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
     function preloadNext() {
       if (videos.length <= 1 || preloadedRef.current) return;
       preloadedRef.current = true;
-      const nextIdx = (currentIndexRef.current + 1) % videos.length;
+      // If there's an emotion-requested video, preload that instead of sequential next
+      let nextIdx: number;
+      if (emotionRequestRef.current) {
+        const reqIdx = videos.indexOf(emotionRequestRef.current);
+        nextIdx = reqIdx !== -1 ? reqIdx : (currentIndexRef.current + 1) % videos.length;
+      } else {
+        nextIdx = (currentIndexRef.current + 1) % videos.length;
+      }
       const next = getNext();
       next.src = videos[nextIdx];
       next.load();
@@ -191,26 +199,12 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
       const progress = this.currentTime / this.duration;
       const remaining = this.duration - this.currentTime;
 
-      // If an emotion-matched video is requested, swap soon (after at least 1s of current)
-      if (emotionRequestRef.current && this.currentTime > 1.0) {
-        const reqVideo = emotionRequestRef.current;
-        const reqIndex = videos.indexOf(reqVideo);
-        // Only interrupt if the requested video is different from current
-        if (reqIndex !== -1 && reqIndex !== currentIndexRef.current) {
-          this.pause();
-          swapToNext();
-          return;
-        } else {
-          emotionRequestRef.current = null; // Same video, clear request
-        }
-      }
-
-      // Preload at 80%
+      // Preload at 80% — if there's an emotion request, preload THAT video
       if (progress > 0.8) {
         preloadNext();
       }
 
-      // Swap at end (skip last frames)
+      // Let the clip play to completion (minus last 8 frames), then swap
       if (remaining <= SKIP_END_SECONDS) {
         this.pause();
         swapToNext();
