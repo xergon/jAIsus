@@ -16,7 +16,7 @@ interface HeroSectionProps {
  */
 export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSectionProps) {
   return (
-    <div className="relative w-full overflow-hidden" style={{ height: '72svh', maxHeight: '660px', minHeight: '420px' }}>
+    <div className="relative w-full overflow-hidden" style={{ height: '85svh', maxHeight: '900px', minHeight: '420px' }}>
       {/* ===== BACKGROUND: Jesus video/image fills hero ===== */}
       <div className="absolute inset-0 z-0">
         <AnimatedJesus isSpeaking={voiceState === 'speaking'} emotion={emotion} />
@@ -31,12 +31,12 @@ export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSect
         }}
       />
 
-      {/* ===== Bottom gradient — fades to WHITE, soft and extended ===== */}
+      {/* ===== Bottom gradient — 150px blend zone at bottom edge of video ===== */}
       <div
         className="absolute bottom-0 left-0 right-0 z-[2] pointer-events-none"
         style={{
-          height: '35%',
-          background: 'linear-gradient(to top, rgba(255,255,255,1) 0%, rgba(255,255,255,0.9) 20%, rgba(255,255,255,0.5) 50%, rgba(255,255,255,0.15) 75%, transparent 100%)',
+          height: '150px',
+          background: 'linear-gradient(to top, rgba(250,250,249,1) 0%, rgba(250,250,249,0.85) 30%, rgba(250,250,249,0.4) 60%, transparent 100%)',
         }}
       />
 

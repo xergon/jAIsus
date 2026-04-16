@@ -319,14 +319,20 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
     setIsSpeaking(false);
   }, [playOneSentence]);
 
+  const lastQueuedRef = useRef<string>('');
+
   const queueSentence = useCallback((sentence: string | null) => {
     if (sentence === null) {
       // Signal end of stream
       streamDoneRef.current = true;
+      lastQueuedRef.current = '';
       return;
     }
     const trimmed = sentence.trim();
     if (!trimmed) return;
+    // Dedup: skip if this exact sentence was just queued (covers race conditions)
+    if (trimmed === lastQueuedRef.current) return;
+    lastQueuedRef.current = trimmed;
     queueRef.current.push(trimmed);
     // Start processing if not already running
     if (!queueActiveRef.current) {
