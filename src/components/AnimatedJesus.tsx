@@ -19,9 +19,9 @@ interface AnimatedJesusProps {
  */
 
 const VIDEO_PLAYLIST = [
-  '/jAisus-embraces.mp4',
-  '/jAisus-loves-you.mp4',
-  '/jAisus-prays.mp4',
+  '/jaisus-embraces.mp4',
+  '/jaisus-loves-you.mp4',
+  '/jaisus-prays.mp4',
   '/jAisus-angry.mp4',
   '/jAisus-suffers.mp4',
   '/jAisus-shakinghead.mp4',

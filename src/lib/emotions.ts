@@ -17,15 +17,15 @@ export type Emotion =
 
 /** Map each emotion to its preferred video file(s), in priority order. */
 export const EMOTION_VIDEO_MAP: Record<Emotion, string[]> = {
-  love:          ['/jAisus-embraces.mp4', '/jAisus-loves-you.mp4'],
-  warmth:        ['/jAisus-loves-you.mp4', '/jAisus-embraces.mp4'],
-  prayer:        ['/jAisus-prays.mp4'],
+  love:          ['/jaisus-embraces.mp4', '/jaisus-loves-you.mp4'],
+  warmth:        ['/jaisus-loves-you.mp4', '/jaisus-embraces.mp4'],
+  prayer:        ['/jaisus-prays.mp4'],
   anger:         ['/jAisus-angry.mp4'],
-  sadness:       ['/jAisus-suffers.mp4', '/jAisus-prays.mp4'],
+  sadness:       ['/jAisus-suffers.mp4', '/jaisus-prays.mp4'],
   disapproval:   ['/jAisus-shakinghead.mp4'],
-  encouragement: ['/jAisus_thumps_up.mp4', '/jAisus-loves-you.mp4'],
-  wonder:        ['/jAisus-prays.mp4', '/jAisus-loves-you.mp4'],
-  neutral:       ['/jAisus-loves-you.mp4', '/jAisus-prays.mp4'],
+  encouragement: ['/jAisus_thumps_up.mp4', '/jaisus-loves-you.mp4'],
+  wonder:        ['/jaisus-prays.mp4', '/jaisus-loves-you.mp4'],
+  neutral:       ['/jaisus-loves-you.mp4', '/jaisus-prays.mp4'],
 };
 
 const EMOTION_TAG_REGEX = /^\s*\[EMOTION:(\w+)\]\s*/;
