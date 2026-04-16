@@ -45,21 +45,12 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
   const currentIndexRef = useRef(0);
   const preloadedRef = useRef(false);
   const mountedRef = useRef(true);
-  const emotionRequestRef = useRef<string | null>(null);
-  const lastEmotionRef = useRef<Emotion>('neutral');
+  // Persistent emotion — every swap consults this to pick the next video
+  const currentEmotionRef = useRef<Emotion>('neutral');
 
-  // When emotion changes, request the matching video
+  // Keep the ref in sync with the prop
   useEffect(() => {
-    if (emotion === lastEmotionRef.current) return;
-    lastEmotionRef.current = emotion;
-    const preferred = EMOTION_VIDEO_MAP[emotion] || EMOTION_VIDEO_MAP.neutral;
-    const available = videosRef.current;
-    if (available.length === 0) return;
-    // Find the first preferred video that's available
-    const match = preferred.find(v => available.includes(v));
-    if (match) {
-      emotionRequestRef.current = match;
-    }
+    currentEmotionRef.current = emotion;
   }, [emotion]);
 
   // Detect available videos on mount
@@ -131,40 +122,32 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
     preloadedRef.current = false;
     va.play().catch(() => {});
 
+    /** Pick the best video index for the current emotion */
+    function pickEmotionVideo(): number {
+      const emo = currentEmotionRef.current;
+      const preferred = EMOTION_VIDEO_MAP[emo] || EMOTION_VIDEO_MAP.neutral;
+      // Find the first preferred video that exists in our available list
+      for (const pref of preferred) {
+        const idx = videos.indexOf(pref);
+        if (idx !== -1) return idx;
+      }
+      // Fallback: next sequential
+      return (currentIndexRef.current + 1) % videos.length;
+    }
+
     function preloadNext() {
       if (videos.length <= 1 || preloadedRef.current) return;
       preloadedRef.current = true;
-      // If there's an emotion-requested video, preload that instead of sequential next
-      let nextIdx: number;
-      if (emotionRequestRef.current) {
-        const reqIdx = videos.indexOf(emotionRequestRef.current);
-        nextIdx = reqIdx !== -1 ? reqIdx : (currentIndexRef.current + 1) % videos.length;
-      } else {
-        nextIdx = (currentIndexRef.current + 1) % videos.length;
-      }
+      const nextIdx = pickEmotionVideo();
       const next = getNext();
       next.src = videos[nextIdx];
       next.load();
-      // Keep hidden until swap
       next.style.visibility = 'hidden';
     }
 
     function swapToNext() {
       if (videos.length === 0) return;
-
-      // Check if there's an emotion-requested video
-      const emotionReq = emotionRequestRef.current;
-      if (emotionReq) {
-        const reqIndex = videos.indexOf(emotionReq);
-        if (reqIndex !== -1 && reqIndex !== currentIndexRef.current) {
-          currentIndexRef.current = reqIndex;
-        } else {
-          currentIndexRef.current = (currentIndexRef.current + 1) % videos.length;
-        }
-        emotionRequestRef.current = null;
-      } else {
-        currentIndexRef.current = (currentIndexRef.current + 1) % videos.length;
-      }
+      currentIndexRef.current = pickEmotionVideo();
 
       const next = getNext();
       const current = getActive();
