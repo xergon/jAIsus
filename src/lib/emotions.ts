@@ -1,6 +1,6 @@
 /**
  * Emotion → video mapping for emotion-matched playback.
- * The AI prefixes each response with [EMOTION:tag] which we strip and use
+ * The AI prefixes each sentence with [EMOTION:tag] which we strip and use
  * to pick the right video clip for AnimatedJesus.
  */
 
@@ -28,21 +28,57 @@ export const EMOTION_VIDEO_MAP: Record<Emotion, string[]> = {
   neutral:       ['/jaisus-loves-you.mp4', '/jaisus-prays.mp4'],
 };
 
-const EMOTION_TAG_REGEX = /^\s*\[EMOTION:(\w+)\]\s*/;
+/**
+ * Alias map: the AI might use natural variants like "angry" instead of "anger",
+ * "compassionate" instead of "love", etc. Map them all to canonical emotions.
+ */
+const EMOTION_ALIASES: Record<string, Emotion> = {
+  // Canonical (exact matches)
+  love: 'love', warmth: 'warmth', prayer: 'prayer', anger: 'anger',
+  sadness: 'sadness', disapproval: 'disapproval', encouragement: 'encouragement',
+  wonder: 'wonder', neutral: 'neutral',
+  // Common variants
+  angry: 'anger', furious: 'anger', outrage: 'anger', outraged: 'anger',
+  righteous: 'anger', indignant: 'anger', indignation: 'anger', wrath: 'anger',
+  sad: 'sadness', sorrow: 'sadness', grief: 'sadness', mourning: 'sadness',
+  pain: 'sadness', suffering: 'sadness', empathy: 'sadness', compassion: 'sadness',
+  compassionate: 'love', loving: 'love', tender: 'love', tenderness: 'love',
+  affection: 'love', embrace: 'love', comfort: 'love', comforting: 'love',
+  warm: 'warmth', gentle: 'warmth', kind: 'warmth', kindness: 'warmth',
+  friendly: 'warmth', welcoming: 'warmth', peaceful: 'warmth', calm: 'warmth',
+  happy: 'warmth', joy: 'warmth', joyful: 'warmth', cheerful: 'warmth',
+  proud: 'encouragement', encouraging: 'encouragement', support: 'encouragement',
+  supportive: 'encouragement', inspire: 'encouragement', inspired: 'encouragement',
+  inspiring: 'encouragement', hope: 'encouragement', hopeful: 'encouragement',
+  approval: 'encouragement', affirming: 'encouragement',
+  disapproving: 'disapproval', disappointed: 'disapproval', stern: 'disapproval',
+  scolding: 'disapproval', warning: 'disapproval', rebuke: 'disapproval',
+  playful: 'disapproval', teasing: 'disapproval', humor: 'disapproval',
+  humorous: 'disapproval', funny: 'disapproval', amused: 'disapproval',
+  prayerful: 'prayer', spiritual: 'prayer', reverent: 'prayer', solemn: 'prayer',
+  blessing: 'prayer', sacred: 'prayer', divine: 'prayer', holy: 'prayer',
+  awe: 'wonder', amazement: 'wonder', curious: 'wonder', curiosity: 'wonder',
+  mystical: 'wonder', cosmic: 'wonder', profound: 'wonder', contemplative: 'wonder',
+  reflective: 'wonder', philosophical: 'wonder', wondrous: 'wonder',
+};
 
-const VALID_EMOTIONS: Emotion[] = [
-  'love', 'warmth', 'prayer', 'anger', 'sadness',
-  'disapproval', 'encouragement', 'wonder', 'neutral',
-];
+/** Resolve a raw tag string to a canonical Emotion, handling aliases and case. */
+function resolveEmotion(raw: string): Emotion | null {
+  const lower = raw.toLowerCase().trim();
+  return EMOTION_ALIASES[lower] ?? null;
+}
 
 /**
  * Parse and strip the emotion tag from a text fragment (sentence or full response).
- * Returns the detected emotion and the clean text without the tag.
+ * Case-insensitive, supports aliases like "angry" → anger.
  */
 export function parseEmotionTag(text: string): { emotion: Emotion; cleanText: string } {
-  const match = text.match(EMOTION_TAG_REGEX);
-  if (match && VALID_EMOTIONS.includes(match[1] as Emotion)) {
-    return { emotion: match[1] as Emotion, cleanText: text.replace(EMOTION_TAG_REGEX, '') };
+  const match = text.match(/^\s*\[EMOTION:\s*(\w+)\s*\]\s*/i);
+  if (match) {
+    const resolved = resolveEmotion(match[1]);
+    if (resolved) {
+      return { emotion: resolved, cleanText: text.replace(match[0], '') };
+    }
   }
   return { emotion: 'neutral', cleanText: text };
 }
@@ -52,11 +88,11 @@ export function parseEmotionTag(text: string): { emotion: Emotion; cleanText: st
  * Returns the clean text and the last emotion found.
  */
 export function stripAllEmotionTags(text: string): { lastEmotion: Emotion; cleanText: string } {
-  const TAG_GLOBAL = /\[EMOTION:(\w+)\]\s*/g;
   let lastEmotion: Emotion = 'neutral';
-  const cleanText = text.replace(TAG_GLOBAL, (_match, tag: string) => {
-    if (VALID_EMOTIONS.includes(tag as Emotion)) {
-      lastEmotion = tag as Emotion;
+  const cleanText = text.replace(/\[EMOTION:\s*(\w+)\s*\]\s*/gi, (_match, tag: string) => {
+    const resolved = resolveEmotion(tag);
+    if (resolved) {
+      lastEmotion = resolved;
     }
     return '';
   });
