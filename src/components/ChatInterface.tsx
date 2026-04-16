@@ -72,10 +72,16 @@ export function ChatInterface() {
 
     if (!rawText) return;
 
+    // Strip all complete emotion tags, track the latest emotion.
+    // This gives us clean text safe for the sentence regex, while
+    // partial tags (mid-stream like "[EMOT") are left as-is — they
+    // contain no punctuation so the sentence regex simply skips them.
+    const { lastEmotion, cleanText: fullText } = stripAllEmotionTags(rawText);
+    if (lastEmotion !== 'neutral') {
+      setCurrentEmotion(lastEmotion);
+    }
+
     // When a NEW assistant message starts streaming, reset tracking.
-    // Use a ref (not state) because state updates are async — if this effect
-    // re-fires before React commits setSpeakingMessageId, spokenLengthRef
-    // would be reset to 0 and the first sentence would be queued twice.
     if (status === 'streaming' && activeMessageIdRef.current !== lastMessage.id) {
       activeMessageIdRef.current = lastMessage.id;
       setSpeakingMessageId(lastMessage.id);
@@ -83,21 +89,15 @@ export function ChatInterface() {
       spokenLengthRef.current = 0;
     }
 
-    // Extract new sentences from the unprocessed RAW text (including emotion tags).
-    // We track position in the RAW text so tag-length changes don't cause drift.
+    // Extract new sentences from the unprocessed clean text
     if (status === 'streaming' || (prevStatusRef.current === 'streaming' && status === 'ready')) {
-      const unprocessed = rawText.slice(spokenLengthRef.current);
-      // Match: optional emotion tag + sentence content + punctuation
-      const sentenceRegex = /(?:\[EMOTION:\w+\]\s*)?[^.!?\[\]]+[.!?]+/g;
+      const unprocessed = fullText.slice(spokenLengthRef.current);
+      const sentenceRegex = /[^.!?]+[.!?]+/g;
       let match;
       let lastEnd = 0;
       while ((match = sentenceRegex.exec(unprocessed)) !== null) {
-        const rawSentence = match[0];
-        // Parse per-sentence emotion and strip the tag for TTS
-        const { emotion, cleanText } = parseEmotionTag(rawSentence);
-        const trimmed = cleanText.trim();
+        const trimmed = match[0].trim();
         if (trimmed.length > 5) {
-          setCurrentEmotion(emotion);
           queueSentence(trimmed);
         }
         lastEnd = match.index + match[0].length;
@@ -109,16 +109,11 @@ export function ChatInterface() {
 
     // When streaming completes, flush any remaining text and signal end
     if (prevStatusRef.current === 'streaming' && status === 'ready') {
-      const remaining = rawText.slice(spokenLengthRef.current).trim();
+      const remaining = fullText.slice(spokenLengthRef.current).trim();
       if (remaining.length > 5) {
-        const { emotion, cleanText } = parseEmotionTag(remaining);
-        const trimmed = cleanText.trim();
-        if (trimmed.length > 5) {
-          setCurrentEmotion(emotion);
-          queueSentence(trimmed);
-        }
+        queueSentence(remaining);
       }
-      queueSentence(null); // Signal end of stream
+      queueSentence(null);
       spokenLengthRef.current = 0;
     }
 
