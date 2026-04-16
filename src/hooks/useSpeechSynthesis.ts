@@ -257,23 +257,27 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
 
       const blobUrl = URL.createObjectURL(blob);
       return new Promise<boolean>((resolve) => {
+        let resolved = false;
+        const done = (ok: boolean) => {
+          if (resolved) return;
+          resolved = true;
+          clearTimeout(safetyTimeout);
+          URL.revokeObjectURL(blobUrl);
+          audioRef.current = null;
+          try { audio.src = ''; } catch { /* */ }
+          resolve(ok);
+        };
+
+        // Safety: if audio never fires onended/onerror, resolve after 15s
+        const safetyTimeout = setTimeout(() => done(false), 15000);
+
         const audio = getWarmAudio() || new Audio();
         audio.src = blobUrl;
         audio.volume = 1.0;
         audioRef.current = audio;
 
-        audio.onended = () => {
-          URL.revokeObjectURL(blobUrl);
-          audioRef.current = null;
-          audio.src = '';
-          resolve(true);
-        };
-        audio.onerror = () => {
-          URL.revokeObjectURL(blobUrl);
-          audioRef.current = null;
-          audio.src = '';
-          resolve(false);
-        };
+        audio.onended = () => done(true);
+        audio.onerror = () => done(false);
 
         // Resume AudioContext
         try {
@@ -286,9 +290,9 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
           const fb = new Audio(blobUrl);
           fb.volume = 1.0;
           audioRef.current = fb;
-          fb.onended = () => { URL.revokeObjectURL(blobUrl); audioRef.current = null; resolve(true); };
-          fb.onerror = () => { URL.revokeObjectURL(blobUrl); audioRef.current = null; resolve(false); };
-          fb.play().catch(() => { URL.revokeObjectURL(blobUrl); resolve(false); });
+          fb.onended = () => done(true);
+          fb.onerror = () => done(false);
+          fb.play().catch(() => done(false));
         });
       });
     } catch (err) {
@@ -302,21 +306,26 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
     queueActiveRef.current = true;
     setIsSpeaking(true);
 
-    while (true) {
-      if (queueRef.current.length > 0) {
-        const sentence = queueRef.current.shift()!;
-        await playOneSentence(sentence);
-      } else if (streamDoneRef.current) {
-        // Stream ended and queue is empty — we're done
-        break;
-      } else {
-        // Queue empty but stream still going — wait a bit
-        await new Promise(r => setTimeout(r, 100));
+    try {
+      while (true) {
+        if (queueRef.current.length > 0) {
+          const sentence = queueRef.current.shift()!;
+          await playOneSentence(sentence);
+        } else if (streamDoneRef.current) {
+          // Stream ended and queue is empty — we're done
+          break;
+        } else {
+          // Queue empty but stream still going — wait a bit
+          await new Promise(r => setTimeout(r, 100));
+        }
       }
+    } catch (err) {
+      console.warn('processQueue error:', err);
+    } finally {
+      // ALWAYS reset — if this gets stuck true, all future speech is blocked
+      queueActiveRef.current = false;
+      setIsSpeaking(false);
     }
-
-    queueActiveRef.current = false;
-    setIsSpeaking(false);
   }, [playOneSentence]);
 
   const lastQueuedRef = useRef<string>('');

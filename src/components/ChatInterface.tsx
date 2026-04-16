@@ -8,7 +8,7 @@ import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
 import { useVoiceState } from '@/hooks/useVoiceState';
 import { useChatHistory } from '@/hooks/useChatHistory';
-import { parseEmotionTag, stripAllEmotionTags, type Emotion } from '@/lib/emotions';
+import { stripAllEmotionTags, type Emotion } from '@/lib/emotions';
 import { HeroSection } from './HeroSection';
 import { ActionButtons } from './ActionButtons';
 import { ChatMessage } from './ChatMessage';
