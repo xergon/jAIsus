@@ -28,8 +28,8 @@ const VIDEO_PLAYLIST = [
   '/jAisus_thumps_up.mp4',
 ];
 
-// Skip last 8 frames (~0.27s at 30fps) to avoid the freeze/glitch at clip end
-const SKIP_END_SECONDS = 0.27;
+// Videos are pre-trimmed (last 8 frames removed). Tiny skip for seamless transition.
+const SKIP_END_SECONDS = 0.05;
 
 export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: AnimatedJesusProps) {
   const videoARef = useRef<HTMLVideoElement>(null);
