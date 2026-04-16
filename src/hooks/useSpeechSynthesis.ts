@@ -69,14 +69,15 @@ function unlockAudio() {
     // Ignore — best effort
   }
 
-  // Play silence on the warm Audio element to unlock HTMLMediaElement path
+  // Play silence on the warm Audio element to unlock HTMLMediaElement path.
+  // Do NOT clear audio.src afterwards — keeps the autoplay privilege alive.
   try {
     const audio = getWarmAudio();
     audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
     audio.volume = 0.01;
     audio.play().then(() => {
       audio.pause();
-      audio.src = '';
+      audio.volume = 1.0;
       console.log('Audio element unlocked successfully');
     }).catch(() => {});
   } catch {
@@ -122,7 +123,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
-      audioRef.current.src = '';
+      // Do NOT clear src — preserves warm audio's autoplay privilege
       audioRef.current = null;
     }
     // Also stop browser TTS
@@ -178,8 +179,6 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
         URL.revokeObjectURL(blobUrl);
         setIsSpeaking(false);
         audioRef.current = null;
-        // Reset src so it can be reused
-        audio.src = '';
       };
 
       audio.onerror = (e) => {
@@ -187,7 +186,6 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
         URL.revokeObjectURL(blobUrl);
         setIsSpeaking(false);
         audioRef.current = null;
-        audio.src = '';
         speakWithBrowser(text, () => setIsSpeaking(false));
       };
 
@@ -264,14 +262,17 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
           clearTimeout(safetyTimeout);
           URL.revokeObjectURL(blobUrl);
           audioRef.current = null;
-          try { audio.src = ''; } catch { /* */ }
+          // Do NOT clear audio.src — on mobile, clearing src on the
+          // gesture-unlocked warm audio element revokes autoplay privilege.
+          // The next play will overwrite src anyway.
           resolve(ok);
         };
 
         // Safety: if audio never fires onended/onerror, resolve after 15s
         const safetyTimeout = setTimeout(() => done(false), 15000);
 
-        const audio = getWarmAudio() || new Audio();
+        const audio = getWarmAudio();
+        audio.pause(); // Stop any previous playback
         audio.src = blobUrl;
         audio.volume = 1.0;
         audioRef.current = audio;
@@ -286,7 +287,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
         } catch { /* */ }
 
         audio.play().catch(() => {
-          // Try fallback
+          // Try fallback with a fresh element
           const fb = new Audio(blobUrl);
           fb.volume = 1.0;
           audioRef.current = fb;
