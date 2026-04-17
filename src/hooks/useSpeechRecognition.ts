@@ -106,7 +106,7 @@ export function useSpeechRecognition(
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
 
-    recognition.continuous = false;
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
 
@@ -117,45 +117,42 @@ export function useSpeechRecognition(
       setError(null);
     };
 
+    // Accumulate all final results (continuous mode produces multiple finals)
+    let accumulatedFinal = '';
+
     recognition.onresult = (event) => {
       let interim = '';
-      let finalText = '';
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         if (result.isFinal) {
-          finalText += result[0].transcript;
+          accumulatedFinal += result[0].transcript;
         } else {
           interim += result[0].transcript;
         }
       }
 
-      if (finalText) {
-        clearSilenceTimer();
-        lastInterimRef.current = '';
-        setTranscript(finalText);
-        setInterimTranscript('');
-        onResultRef.current?.(finalText);
-      } else {
-        setInterimTranscript(interim);
-        lastInterimRef.current = interim;
+      // Show the full text (accumulated finals + current interim)
+      const displayText = (accumulatedFinal + interim).trim();
+      setInterimTranscript(displayText);
+      lastInterimRef.current = displayText;
 
-        // Custom silence timeout: if no new results for 1.2s, force-submit
-        // the interim text. Much faster than the browser's default ~3-4s.
-        clearSilenceTimer();
-        if (interim.trim().length > 0) {
-          silenceTimerRef.current = setTimeout(() => {
-            const text = lastInterimRef.current.trim();
-            if (text) {
-              lastInterimRef.current = '';
-              setTranscript(text);
-              setInterimTranscript('');
-              onResultRef.current?.(text);
-              // Stop recognition since we're submitting
-              try { recognition.stop(); } catch { /* */ }
-            }
-          }, 1200);
-        }
+      // Reset silence timer on every new result — submit after 2.5s of silence.
+      // This gives users time to pause, think, and continue their sentence.
+      clearSilenceTimer();
+      if (displayText.length > 0) {
+        silenceTimerRef.current = setTimeout(() => {
+          const text = (accumulatedFinal + lastInterimRef.current.slice(accumulatedFinal.length)).trim() || lastInterimRef.current.trim();
+          if (text) {
+            lastInterimRef.current = '';
+            accumulatedFinal = '';
+            setTranscript(text);
+            setInterimTranscript('');
+            onResultRef.current?.(text);
+            // Stop recognition since we're submitting
+            try { recognition.stop(); } catch { /* */ }
+          }
+        }, 2500);
       }
     };
 

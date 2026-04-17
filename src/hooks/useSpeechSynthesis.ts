@@ -260,11 +260,9 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
           if (resolved) return;
           resolved = true;
           clearTimeout(safetyTimeout);
-          URL.revokeObjectURL(blobUrl);
+          // Delay blob revocation so stale events don't fire errors on the audio element
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 500);
           audioRef.current = null;
-          // Do NOT clear audio.src — on mobile, clearing src on the
-          // gesture-unlocked warm audio element revokes autoplay privilege.
-          // The next play will overwrite src anyway.
           resolve(ok);
         };
 
@@ -272,11 +270,16 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
         const safetyTimeout = setTimeout(() => done(false), 15000);
 
         const audio = getWarmAudio();
-        audio.pause(); // Stop any previous playback
+        // Null out old handlers FIRST — prevents stale events from a previous
+        // blob URL from resolving this promise prematurely.
+        audio.onended = null;
+        audio.onerror = null;
+        audio.pause();
         audio.src = blobUrl;
         audio.volume = 1.0;
         audioRef.current = audio;
 
+        // Set handlers AFTER src is assigned so only events from this clip resolve
         audio.onended = () => done(true);
         audio.onerror = () => done(false);
 
