@@ -38,6 +38,7 @@ export function ChatInterface() {
   const { voiceState, startListening, startProcessing, startSpeaking, reset } = useVoiceState();
   const { speak, queueSentence, stop: stopSpeaking, isSpeaking } = useSpeechSynthesis();
   const spokenLengthRef = useRef(0); // Track how much text we've already queued for TTS
+  const queuedSentencesRef = useRef<Set<string>>(new Set()); // Dedup: never queue same sentence twice per message
 
   const { messages, sendMessage, status, setMessages } = useChat({
     transport,
@@ -87,6 +88,7 @@ export function ChatInterface() {
       setSpeakingMessageId(lastMessage.id);
       startSpeaking();
       spokenLengthRef.current = 0;
+      queuedSentencesRef.current = new Set();
     }
 
     // Extract new sentences from the unprocessed clean text
@@ -97,7 +99,8 @@ export function ChatInterface() {
       let lastEnd = 0;
       while ((match = sentenceRegex.exec(unprocessed)) !== null) {
         const trimmed = match[0].trim();
-        if (trimmed.length > 5) {
+        if (trimmed.length > 5 && !queuedSentencesRef.current.has(trimmed)) {
+          queuedSentencesRef.current.add(trimmed);
           queueSentence(trimmed);
         }
         lastEnd = match.index + match[0].length;
@@ -110,7 +113,8 @@ export function ChatInterface() {
     // When streaming completes, flush any remaining text and signal end
     if (prevStatusRef.current === 'streaming' && status === 'ready') {
       const remaining = fullText.slice(spokenLengthRef.current).trim();
-      if (remaining.length > 5) {
+      if (remaining.length > 5 && !queuedSentencesRef.current.has(remaining)) {
+        queuedSentencesRef.current.add(remaining);
         queueSentence(remaining);
       }
       queueSentence(null);
@@ -118,7 +122,10 @@ export function ChatInterface() {
     }
 
     prevStatusRef.current = status;
-  }, [status, messages, autoSpeak, queueSentence, speakingMessageId, startSpeaking]);
+    // Note: speakingMessageId intentionally excluded — it's only SET here, not read.
+    // Including it causes unnecessary re-runs that can race with spokenLengthRef.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, messages, autoSpeak, queueSentence, startSpeaking]);
 
   // Update voice state when speaking state changes
   useEffect(() => {
