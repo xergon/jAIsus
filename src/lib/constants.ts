@@ -25,7 +25,7 @@ export const VOICE_OPTIONS = [
   { id: 'ErXwobaYiN019PkySvjV', name: 'Antoni', desc: 'Deep calm' },
 ] as const;
 
-export const DEFAULT_VOICE_ID = 'onwK4e9ZLuTAKqWW03F9'; // Daniel
+export const DEFAULT_VOICE_ID = 'ErXwobaYiN019PkySvjV'; // Antoni
 
 // Flash model for ultra-low latency (~75ms vs ~300ms for multilingual_v2)
 export const ELEVENLABS_MODEL_ID = 'eleven_flash_v2_5';
