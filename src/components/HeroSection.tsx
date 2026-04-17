@@ -31,11 +31,11 @@ export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSect
         }}
       />
 
-      {/* ===== Bottom gradient — 150px blend zone at bottom edge of video ===== */}
+      {/* ===== Bottom gradient — 100px blend zone at bottom edge of video ===== */}
       <div
         className="absolute bottom-0 left-0 right-0 z-[2] pointer-events-none"
         style={{
-          height: '150px',
+          height: '100px',
           background: 'linear-gradient(to top, rgba(250,250,249,1) 0%, rgba(250,250,249,0.85) 30%, rgba(250,250,249,0.4) 60%, transparent 100%)',
         }}
       />
