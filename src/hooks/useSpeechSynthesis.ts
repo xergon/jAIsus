@@ -306,29 +306,34 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
   }, []);
 
   const processQueue = useCallback(async () => {
-    if (queueActiveRef.current) return;
+    if (queueActiveRef.current) {
+      console.log('processQueue: already active, skipping');
+      return;
+    }
     queueActiveRef.current = true;
     setIsSpeaking(true);
+    console.log('processQueue: started');
 
     try {
       while (true) {
         if (queueRef.current.length > 0) {
           const sentence = queueRef.current.shift()!;
-          await playOneSentence(sentence);
+          console.log('processQueue: playing sentence:', sentence.slice(0, 50));
+          const ok = await playOneSentence(sentence);
+          console.log('processQueue: sentence done, ok:', ok);
         } else if (streamDoneRef.current) {
-          // Stream ended and queue is empty — we're done
+          console.log('processQueue: stream done, exiting');
           break;
         } else {
-          // Queue empty but stream still going — wait a bit
           await new Promise(r => setTimeout(r, 100));
         }
       }
     } catch (err) {
       console.warn('processQueue error:', err);
     } finally {
-      // ALWAYS reset — if this gets stuck true, all future speech is blocked
       queueActiveRef.current = false;
       setIsSpeaking(false);
+      console.log('processQueue: finished');
     }
   }, [playOneSentence]);
 
