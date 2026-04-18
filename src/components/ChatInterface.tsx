@@ -143,9 +143,15 @@ export function ChatInterface() {
 
   // Handle voice recognition result
   const handleVoiceResult = useCallback((transcript: string) => {
+    console.log('handleVoiceResult called:', transcript, 'status:', status);
     startProcessing();
-    sendMessage({ text: transcript });
-  }, [startProcessing, sendMessage]);
+    try {
+      sendMessage({ text: transcript });
+      console.log('sendMessage called successfully');
+    } catch (err) {
+      console.error('sendMessage error:', err);
+    }
+  }, [startProcessing, sendMessage, status]);
 
   const { interimTranscript, isListening, isSupported, error: voiceError, start: startRecognition, stop: stopRecognition } = useSpeechRecognition(handleVoiceResult);
 

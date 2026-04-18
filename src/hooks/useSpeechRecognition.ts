@@ -51,8 +51,8 @@ export function useSpeechRecognition(
   const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const onResultRef = useRef(onResult);
-  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastInterimRef = useRef<string>('');
+  const submittedRef = useRef(false);
 
   // Keep onResult ref updated without causing re-renders
   useEffect(() => {
@@ -66,15 +66,7 @@ export function useSpeechRecognition(
     setIsSupported(supported);
   }, []);
 
-  const clearSilenceTimer = useCallback(() => {
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-  }, []);
-
   const stop = useCallback(() => {
-    clearSilenceTimer();
     try {
       recognitionRef.current?.stop();
     } catch {
@@ -83,7 +75,7 @@ export function useSpeechRecognition(
     setIsListening(false);
     setInterimTranscript('');
     lastInterimRef.current = '';
-  }, [clearSilenceTimer]);
+  }, []);
 
   const start = useCallback(() => {
     if (!isSupported) {
@@ -106,9 +98,12 @@ export function useSpeechRecognition(
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
 
-    recognition.continuous = true;
+    // continuous = false: browser handles end-of-speech detection naturally.
+    // This is the most reliable mode across browsers and mobile.
+    recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
+    submittedRef.current = false;
 
     recognition.onstart = () => {
       setIsListening(true);
@@ -117,40 +112,30 @@ export function useSpeechRecognition(
       setError(null);
     };
 
-    // Accumulate all text across continuous recognition results
-    let fullText = '';
-
     recognition.onresult = (event) => {
-      // Rebuild fullText from ALL results (finals + latest interim)
-      let rebuilt = '';
-      let latestInterim = '';
-      for (let i = 0; i < event.results.length; i++) {
-        if (event.results[i].isFinal) {
-          rebuilt += event.results[i][0].transcript;
+      let interim = '';
+      let finalText = '';
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          finalText += result[0].transcript;
         } else {
-          latestInterim += event.results[i][0].transcript;
+          interim += result[0].transcript;
         }
       }
-      fullText = (rebuilt + latestInterim).trim();
 
-      setInterimTranscript(fullText);
-      lastInterimRef.current = fullText;
-
-      // Reset silence timer on every new result — submit after 2s of silence.
-      clearSilenceTimer();
-      if (fullText.length > 0) {
-        silenceTimerRef.current = setTimeout(() => {
-          const text = lastInterimRef.current.trim();
-          if (text) {
-            console.log('Speech recognition submitting:', text);
-            lastInterimRef.current = '';
-            fullText = '';
-            setTranscript(text);
-            setInterimTranscript('');
-            onResultRef.current?.(text);
-            try { recognition.stop(); } catch { /* */ }
-          }
-        }, 2000);
+      if (finalText && !submittedRef.current) {
+        // Browser decided the utterance is complete — submit immediately
+        submittedRef.current = true;
+        lastInterimRef.current = '';
+        setTranscript(finalText);
+        setInterimTranscript('');
+        console.log('Speech final result:', finalText);
+        onResultRef.current?.(finalText);
+      } else {
+        setInterimTranscript(interim);
+        lastInterimRef.current = interim;
       }
     };
 
@@ -168,7 +153,17 @@ export function useSpeechRecognition(
     };
 
     recognition.onend = () => {
-      clearSilenceTimer();
+      // If recognition ended without a final result (e.g., browser timeout),
+      // submit whatever interim text we have as a fallback.
+      if (!submittedRef.current && lastInterimRef.current.trim()) {
+        const text = lastInterimRef.current.trim();
+        console.log('Speech onend fallback submit:', text);
+        submittedRef.current = true;
+        lastInterimRef.current = '';
+        setTranscript(text);
+        setInterimTranscript('');
+        onResultRef.current?.(text);
+      }
       setIsListening(false);
     };
 
@@ -179,18 +174,17 @@ export function useSpeechRecognition(
       setError('Failed to start speech recognition. Please try again.');
       setIsListening(false);
     }
-  }, [isSupported, clearSilenceTimer]);
+  }, [isSupported]);
 
   useEffect(() => {
     return () => {
-      clearSilenceTimer();
       try {
         recognitionRef.current?.abort();
       } catch {
         // Ignore
       }
     };
-  }, [clearSilenceTimer]);
+  }, []);
 
   return { transcript, interimTranscript, isListening, isSupported, error, start, stop };
 }
