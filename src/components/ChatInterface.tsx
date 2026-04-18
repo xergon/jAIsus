@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import type { ActivePanel } from '@/lib/types';
@@ -8,6 +8,7 @@ import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
 import { useVoiceState } from '@/hooks/useVoiceState';
 import { useChatHistory } from '@/hooks/useChatHistory';
+import { useCamera } from '@/hooks/useCamera';
 import { stripAllEmotionTags, type Emotion } from '@/lib/emotions';
 import { HeroSection } from './HeroSection';
 import { ActionButtons } from './ActionButtons';
@@ -19,8 +20,6 @@ import { TeachingPlayer } from './TeachingPlayer';
 import { SettingsPanel } from './SettingsPanel';
 import { CommunityPlaceholder } from './CommunityPlaceholder';
 
-const transport = new DefaultChatTransport({ api: '/api/chat' });
-
 export function ChatInterface() {
   const [input, setInput] = useState('');
   const [activePanel, setActivePanel] = useState<ActivePanel>('none');
@@ -31,18 +30,30 @@ export function ChatInterface() {
   const [currentEmotion, setCurrentEmotion] = useState<Emotion>('neutral');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef<string>('ready');
-  // Ref-based message tracking — state is async and can cause double-queue of the first sentence
   const activeMessageIdRef = useRef<string | null>(null);
 
   const { loadMessages, saveMessages, clearHistory } = useChatHistory();
   const { voiceState, startListening, startProcessing, startSpeaking, reset } = useVoiceState();
   const { speak, queueSentence, stop: stopSpeaking, isSpeaking } = useSpeechSynthesis();
-  const spokenLengthRef = useRef(0); // Track how much text we've already queued for TTS
-  const queuedSentencesRef = useRef<Set<string>>(new Set()); // Dedup: never queue same sentence twice per message
+  const spokenLengthRef = useRef(0);
+  const queuedSentencesRef = useRef<Set<string>>(new Set());
 
-  const { messages, sendMessage, status, setMessages } = useChat({
-    transport,
-  });
+  // Camera / vision
+  const { isActive: cameraActive, sceneDescription, videoRef, toggle: toggleCamera, isSupported: cameraSupported, error: cameraError } = useCamera();
+  // Keep scene in a ref so the transport body can access it without re-creating
+  const sceneRef = useRef<string | null>(null);
+  useEffect(() => { sceneRef.current = sceneDescription; }, [sceneDescription]);
+
+  // Transport with dynamic body — reads sceneRef on each request
+  const transport = useMemo(() => new DefaultChatTransport({
+    api: '/api/chat',
+    body: () => {
+      const scene = sceneRef.current;
+      return scene ? { sceneDescription: scene } : {};
+    },
+  }), []);
+
+  const { messages, sendMessage, status, setMessages } = useChat({ transport });
 
   // Load history on mount
   useEffect(() => {
@@ -73,16 +84,11 @@ export function ChatInterface() {
 
     if (!rawText) return;
 
-    // Strip all complete emotion tags, track the latest emotion.
-    // This gives us clean text safe for the sentence regex, while
-    // partial tags (mid-stream like "[EMOT") are left as-is — they
-    // contain no punctuation so the sentence regex simply skips them.
     const { lastEmotion, cleanText: fullText } = stripAllEmotionTags(rawText);
     if (lastEmotion !== 'neutral') {
       setCurrentEmotion(lastEmotion);
     }
 
-    // When a NEW assistant message starts streaming, reset tracking.
     if (status === 'streaming' && activeMessageIdRef.current !== lastMessage.id) {
       activeMessageIdRef.current = lastMessage.id;
       setSpeakingMessageId(lastMessage.id);
@@ -91,7 +97,6 @@ export function ChatInterface() {
       queuedSentencesRef.current = new Set();
     }
 
-    // Extract new sentences from the unprocessed clean text
     if (status === 'streaming' || (prevStatusRef.current === 'streaming' && status === 'ready')) {
       const unprocessed = fullText.slice(spokenLengthRef.current);
       const sentenceRegex = /[^.!?]+[.!?]+/g;
@@ -110,7 +115,6 @@ export function ChatInterface() {
       }
     }
 
-    // When streaming completes, flush any remaining text and signal end
     if (prevStatusRef.current === 'streaming' && status === 'ready') {
       const remaining = fullText.slice(spokenLengthRef.current).trim();
       if (remaining.length > 5 && !queuedSentencesRef.current.has(remaining)) {
@@ -122,12 +126,9 @@ export function ChatInterface() {
     }
 
     prevStatusRef.current = status;
-    // Note: speakingMessageId intentionally excluded — it's only SET here, not read.
-    // Including it causes unnecessary re-runs that can race with spokenLengthRef.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, messages, autoSpeak, queueSentence, startSpeaking]);
 
-  // Update voice state when speaking state changes
   useEffect(() => {
     if (!isSpeaking && voiceState === 'speaking') {
       setSpeakingMessageId(null);
@@ -136,33 +137,28 @@ export function ChatInterface() {
     }
   }, [isSpeaking, voiceState, reset]);
 
-  // Auto-scroll chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Handle voice recognition result
   const handleVoiceResult = useCallback((transcript: string) => {
-    console.log('handleVoiceResult called:', transcript, 'status:', status);
+    console.log('handleVoiceResult called:', transcript);
     startProcessing();
     try {
       sendMessage({ text: transcript });
-      console.log('sendMessage called successfully');
     } catch (err) {
       console.error('sendMessage error:', err);
     }
-  }, [startProcessing, sendMessage, status]);
+  }, [startProcessing, sendMessage]);
 
   const { interimTranscript, isListening, isSupported, error: voiceError, start: startRecognition, stop: stopRecognition } = useSpeechRecognition(handleVoiceResult);
 
-  // Stop mic when TTS starts speaking to prevent self-listening loop
   useEffect(() => {
     if (isSpeaking && isListening) {
       stopRecognition();
     }
   }, [isSpeaking, isListening, stopRecognition]);
 
-  // Sync listening state
   useEffect(() => {
     if (isListening) {
       startListening();
@@ -195,11 +191,9 @@ export function ChatInterface() {
     if (voiceState === 'listening') {
       stopRecognition();
     } else if (voiceState === 'speaking' || isSpeaking) {
-      // Interrupt: stop TTS and immediately start listening
       stopSpeaking();
       setSpeakingMessageId(null);
       reset();
-      // Small delay to let audio fully stop before opening mic
       setTimeout(() => startRecognition(), 150);
     } else {
       startRecognition();
@@ -214,10 +208,8 @@ export function ChatInterface() {
   return (
     <div className="flex flex-col min-h-screen bg-stone-50">
       <div className="flex-1 flex flex-col max-w-md mx-auto w-full">
-        {/* Dark hero with title, visualizers, image */}
         <HeroSection voiceState={voiceState} interimTranscript={interimTranscript} emotion={currentEmotion} />
 
-        {/* Action buttons — hidden in voice-only mode */}
         {!autoSpeak && (
           <ActionButtons
             onAskQuestion={handleAskQuestion}
@@ -225,15 +217,36 @@ export function ChatInterface() {
           />
         )}
 
-        {/* Voice-only mode: no chat text, just a floating mic and status */}
         {autoSpeak ? (
           <>
             <div className="flex-1" />
-            {/* Status indicator overlay */}
+
+            {/* Camera preview — small floating window */}
+            {cameraActive && (
+              <div className="px-4 pb-2">
+                <div className="relative w-24 h-24 rounded-xl overflow-hidden border-2 border-amber-400/50 shadow-lg mx-auto">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover mirror"
+                    style={{ transform: 'scaleX(-1)' }}
+                  />
+                  {sceneDescription && (
+                    <div className="absolute bottom-0 inset-x-0 bg-black/60 px-1 py-0.5">
+                      <p className="text-[8px] text-white/80 truncate">{sceneDescription.slice(0, 60)}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Status indicators */}
             <div className="px-4 py-3 text-center">
-              {voiceError && (
+              {(voiceError || cameraError) && (
                 <div className="py-2 px-3 bg-amber-50/90 border border-amber-200 rounded-lg text-amber-700 text-xs mb-2">
-                  {voiceError}
+                  {voiceError || cameraError}
                 </div>
               )}
               {(status === 'submitted' || status === 'streaming') && (
@@ -257,6 +270,7 @@ export function ChatInterface() {
                 </div>
               )}
             </div>
+
             {/* Transcript overlay */}
             {showTranscript && messages.length > 0 && (
               <div className="px-4 pb-2 max-h-48 overflow-y-auto">
@@ -277,31 +291,59 @@ export function ChatInterface() {
                 </div>
               </div>
             )}
-            {/* Floating mic + settings + transcript buttons */}
+
+            {/* Floating buttons: settings, mic, camera, transcript */}
             <div className="sticky bottom-0 bg-transparent px-4 py-4">
-              <div className="flex items-center justify-center gap-4">
-                {/* Settings button */}
+              <div className="flex items-center justify-center gap-3">
+                {/* Settings */}
                 <button
                   onClick={() => setActivePanel('settings')}
-                  className="w-10 h-10 rounded-full bg-stone-200 flex items-center justify-center
-                    text-stone-500 active:scale-95 transition-transform shadow-sm"
+                  className="w-10 h-10 rounded-full bg-stone-200 flex items-center justify-center text-stone-500 active:scale-95 transition-transform shadow-sm"
                   aria-label="Settings"
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
                   </svg>
                 </button>
+
+                {/* Camera toggle */}
+                {cameraSupported && (
+                  <button
+                    onClick={toggleCamera}
+                    className={`w-10 h-10 rounded-full flex items-center justify-center active:scale-95 transition-transform shadow-sm ${
+                      cameraActive ? 'bg-amber-500 text-white' : 'bg-stone-200 text-stone-500'
+                    }`}
+                    aria-label={cameraActive ? 'Turn off camera' : 'Let Jesus see you'}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      {cameraActive ? (
+                        <>
+                          <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                        </>
+                      ) : (
+                        <>
+                          <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                          <line x1="1" y1="1" x2="23" y2="23" strokeWidth="2"/>
+                        </>
+                      )}
+                    </svg>
+                  </button>
+                )}
+
+                {/* Mic */}
                 <VoiceButton
                   voiceState={voiceState}
                   onStart={handleVoiceToggle}
                   onStop={handleVoiceToggle}
                   isSupported={isSupported}
                 />
+
                 {/* Transcript toggle */}
                 <button
                   onClick={() => setShowTranscript(!showTranscript)}
-                  className={`w-10 h-10 rounded-full flex items-center justify-center
-                    active:scale-95 transition-transform shadow-sm ${showTranscript ? 'bg-teal-500 text-white' : 'bg-stone-200 text-stone-500'}`}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center active:scale-95 transition-transform shadow-sm ${
+                    showTranscript ? 'bg-teal-500 text-white' : 'bg-stone-200 text-stone-500'
+                  }`}
                   aria-label="Show transcript"
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -313,7 +355,6 @@ export function ChatInterface() {
           </>
         ) : (
           <>
-            {/* Chat history section — only shown when autoSpeak is off */}
             <div className="flex-1 px-4 py-2 space-y-3 overflow-y-auto border-t border-stone-200">
               {voiceError && (
                 <div className="text-center py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-xs animate-fade-in">
@@ -333,11 +374,7 @@ export function ChatInterface() {
                   <div className="bg-white border border-stone-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
                     <div className="flex gap-1.5">
                       {[0, 1, 2].map(i => (
-                        <div
-                          key={i}
-                          className="w-2 h-2 rounded-full bg-teal-400 animate-bounce"
-                          style={{ animationDelay: `${i * 0.15}s` }}
-                        />
+                        <div key={i} className="w-2 h-2 rounded-full bg-teal-400 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
                       ))}
                     </div>
                   </div>
@@ -346,7 +383,6 @@ export function ChatInterface() {
               <div ref={chatEndRef} />
             </div>
 
-            {/* Input bar — only in text mode */}
             <div className="sticky bottom-0 bg-stone-50/95 backdrop-blur-sm border-t border-stone-200 px-4 py-3">
               <form onSubmit={handleTextSubmit} className="flex items-center gap-2">
                 <input
