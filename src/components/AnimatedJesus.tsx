@@ -124,7 +124,7 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
 
     let revealed = false;
     function revealVideo() {
-      if (revealed) return;
+      if (revealed || !va) return;
       revealed = true;
       va.removeEventListener('loadeddata', revealVideo);
       va.removeEventListener('canplay', revealVideo);
