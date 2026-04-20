@@ -13,6 +13,7 @@ export async function POST(req: Request) {
     personalityId?: string;
   } = await req.json();
 
+  console.log('[chat] personalityId:', personalityId, '→ provider:', getPersonality(personalityId || DEFAULT_PERSONALITY_ID).provider);
   const personality = getPersonality(personalityId || DEFAULT_PERSONALITY_ID);
   let system = personality.systemPrompt;
   // Detect if this is an auto-vision ping (parenthetical message)
