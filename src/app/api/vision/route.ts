@@ -10,7 +10,7 @@ Be concise and observational, like quick notes. Example: "Two friends sitting on
 Do NOT moralize or comment. Just describe what you see factually.`;
 
 export async function POST(req: Request) {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return Response.json({ error: 'Gemini API key not configured' }, { status: 500 });
   }
