@@ -266,8 +266,8 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
           resolve(ok);
         };
 
-        // Safety: if audio never fires onended/onerror, resolve after 15s
-        const safetyTimeout = setTimeout(() => done(false), 15000);
+        // Safety: if audio never fires onended/onerror, resolve after 30s
+        const safetyTimeout = setTimeout(() => done(false), 30000);
 
         const audio = getWarmAudio();
         // Null out old handlers FIRST — prevents stale events from a previous

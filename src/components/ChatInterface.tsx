@@ -204,14 +204,22 @@ export function ChatInterface() {
 
     if (status === 'streaming' || (prevStatusRef.current === 'streaming' && status === 'ready')) {
       const unprocessed = fullText.slice(spokenLengthRef.current);
+      // Split on sentence-ending punctuation
       const sentenceRegex = /[^.!?]+[.!?]+/g;
       let match;
       let lastEnd = 0;
       while ((match = sentenceRegex.exec(unprocessed)) !== null) {
         const trimmed = match[0].trim();
-        if (trimmed.length > 5 && !queuedSentencesRef.current.has(trimmed)) {
-          queuedSentencesRef.current.add(trimmed);
-          queueSentence(trimmed);
+        // Break long sentences (>120 chars) at em-dashes or commas to avoid TTS timeouts
+        const chunks = trimmed.length > 120
+          ? trimmed.split(/(?<=[,;])\s+| — |—/).filter(c => c.trim().length > 3)
+          : [trimmed];
+        for (const chunk of chunks) {
+          const c = chunk.trim();
+          if (c.length > 5 && !queuedSentencesRef.current.has(c)) {
+            queuedSentencesRef.current.add(c);
+            queueSentence(c);
+          }
         }
         lastEnd = match.index + match[0].length;
       }
