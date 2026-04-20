@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.68",
+    "@ai-sdk/deepseek": "^2.0.29",
     "@ai-sdk/react": "^3.0.158",
     "@ai-sdk/xai": "^3.0.83",
     "@google/generative-ai": "^0.24.1",

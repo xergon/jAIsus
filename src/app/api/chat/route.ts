@@ -1,6 +1,7 @@
 import { convertToModelMessages, streamText, UIMessage } from 'ai';
 import { anthropic } from '@ai-sdk/anthropic';
 import { xai } from '@ai-sdk/xai';
+import { deepseek } from '@ai-sdk/deepseek';
 import { getPersonality, DEFAULT_PERSONALITY_ID } from '@/lib/personalities';
 
 export const maxDuration = 30;
@@ -39,9 +40,11 @@ DO NOT monologue. DO NOT philosophize. DO NOT be sentimental. ONE sentence, make
   }
 
   // Pick model based on personality provider
-  const model = personality.provider === 'grok'
-    ? xai('grok-3-mini-fast')
-    : anthropic('claude-haiku-4-5-20251001');
+  const model = personality.provider === 'deepseek'
+    ? deepseek('deepseek-chat')
+    : personality.provider === 'grok'
+      ? xai('grok-3-mini-fast')
+      : anthropic('claude-haiku-4-5-20251001');
 
   const result = streamText({
     model,
