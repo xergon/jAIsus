@@ -122,14 +122,28 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
     currentIndexRef.current = 0;
     preloadedRef.current = false;
 
-    function onFirstCanPlay() {
-      va.removeEventListener('canplay', onFirstCanPlay);
+    let revealed = false;
+    function revealVideo() {
+      if (revealed) return;
+      revealed = true;
+      va.removeEventListener('loadeddata', revealVideo);
+      va.removeEventListener('canplay', revealVideo);
+      va.removeEventListener('playing', revealVideo);
       if (!mountedRef.current) return;
       va.style.visibility = 'visible';
       setVideoReady(true);
     }
-    va.addEventListener('canplay', onFirstCanPlay);
-    va.play().catch(() => {});
+    // Try multiple events — whichever fires first reveals the video
+    va.addEventListener('loadeddata', revealVideo);
+    va.addEventListener('canplay', revealVideo);
+    va.addEventListener('playing', revealVideo);
+    // Safety: reveal after 3s no matter what (prevents permanent black screen)
+    setTimeout(revealVideo, 3000);
+
+    va.play().catch(() => {
+      // Autoplay blocked — reveal anyway so user sees the first frame as a still
+      revealVideo();
+    });
 
     /** Pick the best video index for the current emotion */
     function pickEmotionVideo(): number {
