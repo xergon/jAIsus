@@ -13,7 +13,7 @@ const VISION_INTERVAL_OPTIONS = [
   { value: 300, label: '5 min' },
 ];
 
-export const DEFAULT_VISION_INTERVAL = 60; // seconds
+export const DEFAULT_VISION_INTERVAL = 30; // seconds
 
 export function getStoredVisionInterval(): number {
   if (typeof window === 'undefined') return DEFAULT_VISION_INTERVAL;
