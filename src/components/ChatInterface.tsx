@@ -36,7 +36,8 @@ export function ChatInterface() {
   const prevStatusRef = useRef<string>('ready');
   const activeMessageIdRef = useRef<string | null>(null);
   const lastSpokenTextRef = useRef<string>('');
-  const sendMessageRef = useRef(sendMessage);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sendMessageRef = useRef<any>(null);
 
   const { loadMessages, saveMessages, clearHistory } = useChatHistory();
   const { voiceState, startListening, startProcessing, startSpeaking, reset } = useVoiceState();
