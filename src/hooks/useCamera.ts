@@ -7,6 +7,8 @@ interface UseCameraResult {
   isActive: boolean;
   /** Latest scene description from Gemini */
   sceneDescription: string | null;
+  /** Rolling buffer of recent scene observations (last ~30s) */
+  sceneHistory: string[];
   /** The video element ref — attach to a <video> for preview */
   videoRef: React.RefObject<HTMLVideoElement | null>;
   /** Toggle camera on/off */
@@ -17,8 +19,11 @@ interface UseCameraResult {
   error: string | null;
 }
 
-/** How often to capture and analyze a frame (ms) */
-const CAPTURE_INTERVAL = 5000;
+/** How often to capture and analyze a frame (ms) — 10s balances cost vs context */
+const CAPTURE_INTERVAL = 10000;
+
+/** How many recent descriptions to keep in the rolling buffer */
+const MAX_HISTORY = 3;
 
 /** Max image dimension — keep small to save bandwidth */
 const MAX_SIZE = 512;
@@ -26,6 +31,7 @@ const MAX_SIZE = 512;
 export function useCamera(): UseCameraResult {
   const [isActive, setIsActive] = useState(false);
   const [sceneDescription, setSceneDescription] = useState<string | null>(null);
+  const [sceneHistory, setSceneHistory] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isSupported, setIsSupported] = useState(false);
 
@@ -93,7 +99,8 @@ export function useCamera(): UseCameraResult {
       if (data.description && activeRef.current) {
         console.log('Scene:', data.description);
         setSceneDescription(data.description);
-        setError(null); // Clear any previous vision errors
+        setSceneHistory(prev => [...prev.slice(-(MAX_HISTORY - 1)), data.description]);
+        setError(null);
       } else if (data.error) {
         console.error('Vision API returned error:', data.error, data.details);
         setError(`Vision: ${data.error}`);
@@ -126,8 +133,7 @@ export function useCamera(): UseCameraResult {
 
       setIsActive(true);
 
-      // Start periodic frame capture
-      // Analyze first frame after a short delay (let camera warm up)
+      // Analyze first frame after a short delay (let camera warm up), then every 10s
       setTimeout(() => analyzeFrame(), 1500);
       intervalRef.current = setInterval(() => analyzeFrame(), CAPTURE_INTERVAL);
     } catch (err) {
@@ -159,6 +165,7 @@ export function useCamera(): UseCameraResult {
 
     setIsActive(false);
     setSceneDescription(null);
+    setSceneHistory([]);
   }, []);
 
   const toggle = useCallback(() => {
@@ -180,5 +187,5 @@ export function useCamera(): UseCameraResult {
     };
   }, []);
 
-  return { isActive, sceneDescription, videoRef, toggle, isSupported, error };
+  return { isActive, sceneDescription, sceneHistory, videoRef, toggle, isSupported, error };
 }
