@@ -16,7 +16,8 @@ export async function POST(req: Request) {
   let system = personality.systemPrompt;
   // Detect if this is an auto-vision ping (parenthetical message)
   const lastMsg = messages[messages.length - 1];
-  const lastText = lastMsg?.parts?.filter((p: { type: string }) => p.type === 'text').map((p: { type: string; text: string }) => p.text).join('') || '';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lastText = lastMsg?.parts?.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') || '';
   const isVisionPing = lastText.startsWith('(') && lastText.endsWith(')');
   const hasVision = !!sceneDescription;
 
