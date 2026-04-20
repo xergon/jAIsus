@@ -40,6 +40,7 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
   const [imageLoaded, setImageLoaded] = useState(false);
   const imageRef = useRef<HTMLImageElement | null>(null);
 
+  const [videoReady, setVideoReady] = useState(false);
   const videosRef = useRef<string[]>([]);
   const activeSlotRef = useRef<'A' | 'B'>('A');
   const currentIndexRef = useRef(0);
@@ -111,15 +112,23 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
       el.load();
     }
 
-    // Initialize: A plays, B is empty
+    // Initialize: A plays, B is empty. Hide until first frame is decoded.
     va.src = videos[0];
     va.load();
-    va.style.visibility = 'visible';
+    va.style.visibility = 'hidden';
     vb.style.visibility = 'hidden';
     releaseVideo(vb);
     activeSlotRef.current = 'A';
     currentIndexRef.current = 0;
     preloadedRef.current = false;
+
+    function onFirstCanPlay() {
+      va.removeEventListener('canplay', onFirstCanPlay);
+      if (!mountedRef.current) return;
+      va.style.visibility = 'visible';
+      setVideoReady(true);
+    }
+    va.addEventListener('canplay', onFirstCanPlay);
     va.play().catch(() => {});
 
     /** Pick the best video index for the current emotion */
@@ -372,6 +381,10 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
   if (mode === 'video') {
     return (
       <div className="absolute inset-0 w-full h-full bg-[#0a0e1a]">
+        {/* Dark background visible until first video frame is decoded */}
+        {!videoReady && (
+          <div className="absolute inset-0 bg-[#0a0e1a] z-10" />
+        )}
         <video
           ref={videoARef}
           muted
