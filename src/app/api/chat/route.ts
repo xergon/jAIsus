@@ -13,16 +13,34 @@ export async function POST(req: Request) {
 
   const personality = getPersonality(personalityId || DEFAULT_PERSONALITY_ID);
   let system = personality.systemPrompt;
+  // Detect if this is an auto-vision ping (parenthetical message)
+  const lastMsg = messages[messages.length - 1];
+  const lastText = lastMsg?.parts?.filter((p: { type: string }) => p.type === 'text').map((p: { type: string; text: string }) => p.text).join('') || '';
+  const isVisionPing = lastText.startsWith('(') && lastText.endsWith(')');
   const hasVision = !!sceneDescription;
+
   if (hasVision) {
-    system += `\n\nVISION — YOU CAN SEE THE USER RIGHT NOW:\nYou see: "${sceneDescription}"\nRules for vision comments:\n- MAX 1-2 sentences. Be BRIEF.\n- Be witty, teasing, playful. Roast them gently. Make them laugh.\n- Ask a cheeky question or make a joke about what you see.\n- Examples: "That posture would make a chiropractor weep.", "Are you eating AGAIN? I fasted 40 days, just saying.", "Is that your cat or did a furry demon sneak in?", "You've been staring at that screen so long I thought you were praying."\n- NEVER describe the scene like a robot. NEVER say "I can see..." — just react.\n- If the message is a parenthetical like "(observe...)", ONLY comment on what you see.`;
+    if (isVisionPing) {
+      // Override the entire system prompt for vision pings — force extreme brevity
+      system = `You are observing someone through a camera. You see: "${sceneDescription}"
+
+RESPOND WITH EXACTLY ONE SHORT SENTENCE. Maximum 15 words. Be witty, cheeky, or funny. Examples:
+- "That posture would make a chiropractor weep."
+- "Are you eating AGAIN? I fasted 40 days, just saying."
+- "Is that your cat or a furry demon?"
+- "You've been staring at that screen so long I thought you were praying."
+
+DO NOT monologue. DO NOT philosophize. DO NOT be sentimental. ONE sentence, make it count.`;
+    } else {
+      system += `\n\n[You can see the user right now: "${sceneDescription}" — you may briefly reference what you see, but focus on answering their question.]`;
+    }
   }
 
   const result = streamText({
     model: anthropic('claude-haiku-4-5-20251001'),
     system,
     messages: await convertToModelMessages(messages),
-    maxOutputTokens: hasVision ? 100 : 300,
+    maxOutputTokens: isVisionPing ? 60 : 300,
   });
 
   return result.toUIMessageStreamResponse();
