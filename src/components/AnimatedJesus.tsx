@@ -125,24 +125,44 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
     let revealed = false;
     function revealVideo() {
       if (revealed || !va) return;
+      // Only reveal once the video has actual dimensions AND is playing —
+      // Chrome shows a distorted/zoomed first frame if we reveal too early
+      if (va.videoWidth === 0 || va.videoHeight === 0) {
+        // Dimensions not ready yet — wait for next event
+        return;
+      }
       revealed = true;
       va.removeEventListener('loadeddata', revealVideo);
       va.removeEventListener('canplay', revealVideo);
       va.removeEventListener('playing', revealVideo);
+      va.removeEventListener('resize', revealVideo);
       if (!mountedRef.current) return;
-      va.style.visibility = 'visible';
-      setVideoReady(true);
+      // Small delay lets Chrome finish compositing the frame with correct object-fit
+      requestAnimationFrame(() => {
+        if (!mountedRef.current || !va) return;
+        va.style.visibility = 'visible';
+        setVideoReady(true);
+      });
     }
-    // Try multiple events — whichever fires first reveals the video
+    // 'playing' = actually rendering frames (best signal)
+    // 'resize' = video dimensions changed (fires when first frame decodes)
+    // 'loadeddata' / 'canplay' = fallback for browsers that don't fire playing
+    va.addEventListener('playing', revealVideo);
+    va.addEventListener('resize', revealVideo);
     va.addEventListener('loadeddata', revealVideo);
     va.addEventListener('canplay', revealVideo);
-    va.addEventListener('playing', revealVideo);
     // Safety: reveal after 3s no matter what (prevents permanent black screen)
-    setTimeout(revealVideo, 3000);
+    setTimeout(() => {
+      if (!revealed && va) {
+        revealed = true;
+        va.style.visibility = 'visible';
+        setVideoReady(true);
+      }
+    }, 3000);
 
     va.play().catch(() => {
-      // Autoplay blocked — reveal anyway so user sees the first frame as a still
-      revealVideo();
+      // Autoplay blocked — wait a beat then reveal the still frame
+      setTimeout(revealVideo, 300);
     });
 
     /** Pick the best video index for the current emotion */
