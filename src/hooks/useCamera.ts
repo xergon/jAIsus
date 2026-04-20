@@ -27,9 +27,14 @@ export function useCamera(): UseCameraResult {
   const [isActive, setIsActive] = useState(false);
   const [sceneDescription, setSceneDescription] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isSupported] = useState(() =>
-    typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
-  );
+  const [isSupported, setIsSupported] = useState(false);
+
+  // Defer support check to client-side only (avoids hydration mismatch)
+  useEffect(() => {
+    setIsSupported(
+      typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+    );
+  }, []);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);

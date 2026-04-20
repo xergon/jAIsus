@@ -90,7 +90,7 @@ export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSect
           <div className="flex flex-col items-center gap-2">
             <div className="flex items-center gap-[2px] h-12">
               {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(i => {
-                const baseH = 6 + Math.sin(i * 0.8) * 14 + Math.cos(i * 1.3) * 8;
+                const baseH = Math.round(6 + Math.sin(i * 0.8) * 14 + Math.cos(i * 1.3) * 8);
                 return (
                   <div
                     key={i}
@@ -122,7 +122,7 @@ export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSect
           <div className="flex flex-col items-center gap-2">
             <div className="flex items-end gap-[2px] h-12">
               {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].map(i => {
-                const baseH = 4 + Math.abs(Math.sin(i * 0.7)) * 20;
+                const baseH = Math.round(4 + Math.abs(Math.sin(i * 0.7)) * 20);
                 return (
                   <div
                     key={i}

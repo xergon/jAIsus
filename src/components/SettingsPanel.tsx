@@ -3,6 +3,25 @@
 import { useState, useEffect } from 'react';
 import { VOICE_OPTIONS, DEFAULT_VOICE_ID } from '@/lib/constants';
 import { setStoredVoiceId } from '@/hooks/useSpeechSynthesis';
+import { PERSONALITIES } from '@/lib/personalities';
+
+const VISION_INTERVAL_OPTIONS = [
+  { value: 15, label: '15s' },
+  { value: 30, label: '30s' },
+  { value: 60, label: '1 min' },
+  { value: 120, label: '2 min' },
+  { value: 300, label: '5 min' },
+];
+
+export const DEFAULT_VISION_INTERVAL = 60; // seconds
+
+export function getStoredVisionInterval(): number {
+  if (typeof window === 'undefined') return DEFAULT_VISION_INTERVAL;
+  try {
+    const saved = localStorage.getItem('jaisus-vision-interval');
+    return saved ? parseInt(saved, 10) : DEFAULT_VISION_INTERVAL;
+  } catch { return DEFAULT_VISION_INTERVAL; }
+}
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -11,6 +30,11 @@ interface SettingsPanelProps {
   onToggleAutoSpeak: () => void;
   onClearHistory: () => void;
   onTestVoice?: (voiceId: string) => void;
+  visionInterval: number;
+  onVisionIntervalChange: (seconds: number) => void;
+  cameraActive: boolean;
+  personalityId: string;
+  onPersonalityChange: (id: string) => void;
 }
 
 export function SettingsPanel({
@@ -20,6 +44,11 @@ export function SettingsPanel({
   onToggleAutoSpeak,
   onClearHistory,
   onTestVoice,
+  visionInterval,
+  onVisionIntervalChange,
+  cameraActive,
+  personalityId,
+  onPersonalityChange,
 }: SettingsPanelProps) {
   const [cleared, setCleared] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState(DEFAULT_VOICE_ID);
@@ -68,6 +97,30 @@ export function SettingsPanel({
         <h2 className="text-lg font-bold text-stone-800">Settings</h2>
 
         <div className="mt-4 space-y-4">
+          {/* Personality selector */}
+          <div>
+            <p className="text-sm font-medium text-stone-800 mb-2">Personality</p>
+            <div className="grid grid-cols-2 gap-2">
+              {PERSONALITIES.map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => onPersonalityChange(p.id)}
+                  className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-left transition-all ${
+                    personalityId === p.id
+                      ? 'bg-amber-100 border-2 border-amber-500 shadow-sm'
+                      : 'bg-stone-50 border-2 border-transparent'
+                  }`}
+                >
+                  <span className="text-lg">{p.emoji}</span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-stone-800 truncate">{p.name}</p>
+                    <p className="text-[10px] text-stone-500 truncate">{p.desc}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Auto-speak toggle */}
           <div className="flex items-center justify-between">
             <div>
@@ -86,6 +139,34 @@ export function SettingsPanel({
                 }`}
               />
             </button>
+          </div>
+
+          {/* Vision interval */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <div>
+                <p className="text-sm font-medium text-stone-800">Vision interval</p>
+                <p className="text-xs text-stone-500">
+                  {cameraActive ? 'How often Jesus comments on what he sees' : 'Enable camera to use vision'}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-1.5">
+              {VISION_INTERVAL_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => onVisionIntervalChange(opt.value)}
+                  disabled={!cameraActive}
+                  className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-colors ${
+                    visionInterval === opt.value
+                      ? 'bg-amber-500 text-white'
+                      : 'bg-stone-100 text-stone-600 disabled:opacity-40'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Voice selection */}

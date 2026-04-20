@@ -5,7 +5,7 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import type { ActivePanel } from '@/lib/types';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
-import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
+import { useSpeechSynthesis, setStoredVoiceId } from '@/hooks/useSpeechSynthesis';
 import { useVoiceState } from '@/hooks/useVoiceState';
 import { useChatHistory } from '@/hooks/useChatHistory';
 import { useCamera } from '@/hooks/useCamera';
@@ -17,7 +17,8 @@ import { VoiceButton } from './VoiceButton';
 import { ParablesDrawer } from './ParablesDrawer';
 import { PrayerRequestForm } from './PrayerRequestForm';
 import { TeachingPlayer } from './TeachingPlayer';
-import { SettingsPanel } from './SettingsPanel';
+import { SettingsPanel, getStoredVisionInterval } from './SettingsPanel';
+import { getPersonality, getStoredPersonalityId, setStoredPersonalityId } from '@/lib/personalities';
 import { CommunityPlaceholder } from './CommunityPlaceholder';
 
 export function ChatInterface() {
@@ -28,6 +29,9 @@ export function ChatInterface() {
   const [mounted, setMounted] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const [currentEmotion, setCurrentEmotion] = useState<Emotion>('neutral');
+  const [visionInterval, setVisionInterval] = useState(60);
+  const [personalityId, setPersonalityId] = useState('mushroom-guru');
+  const personalityRef = useRef('mushroom-guru');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef<string>('ready');
   const activeMessageIdRef = useRef<string | null>(null);
@@ -44,23 +48,76 @@ export function ChatInterface() {
   const sceneRef = useRef<string | null>(null);
   useEffect(() => { sceneRef.current = sceneDescription; }, [sceneDescription]);
 
-  // Transport with dynamic body — reads sceneRef on each request
+  // Track which message IDs are auto-vision pings (to hide the "user" bubble)
+  const visionMessageIds = useRef<Set<string>>(new Set());
+
+  // Transport with dynamic body — reads sceneRef and personalityRef on each request
   const transport = useMemo(() => new DefaultChatTransport({
     api: '/api/chat',
     body: () => {
       const scene = sceneRef.current;
-      return scene ? { sceneDescription: scene } : {};
+      return {
+        personalityId: personalityRef.current,
+        ...(scene ? { sceneDescription: scene } : {}),
+      };
     },
   }), []);
 
   const { messages, sendMessage, status, setMessages } = useChat({ transport });
 
-  // Load history on mount
+  // Auto-vision: every 60s when camera is active, prompt Jesus to react to what he sees
+  const statusRef = useRef(status);
+  useEffect(() => { statusRef.current = status; }, [status]);
+
+  const mountedRef = useRef(false);
+  useEffect(() => { mountedRef.current = mounted; }, [mounted]);
+
+  useEffect(() => {
+    if (!cameraActive || !autoSpeak) return;
+
+    const visionPrompts = [
+      '(observe what you see and comment naturally)',
+      '(look around and share what catches your eye)',
+      '(react to what you see right now)',
+      '(notice something about the scene and mention it)',
+      '(comment on what is happening around you)',
+    ];
+    let promptIndex = 0;
+
+    console.log('Auto-vision interval set to', visionInterval, 'seconds');
+    const interval = setInterval(() => {
+      // Only send if mounted and not already streaming/processing
+      if (!mountedRef.current) return;
+      if (statusRef.current !== 'ready') return;
+      // Only send if we have a scene description
+      if (!sceneRef.current) return;
+
+      const prompt = visionPrompts[promptIndex % visionPrompts.length];
+      promptIndex++;
+      console.log('Auto-vision ping:', prompt);
+      try {
+        sendMessage({ text: prompt });
+      } catch (err) {
+        console.warn('Auto-vision sendMessage failed:', err);
+      }
+    }, visionInterval * 1000);
+
+    return () => clearInterval(interval);
+  }, [cameraActive, autoSpeak, sendMessage, visionInterval]);
+
+  // Load history + settings on mount
   useEffect(() => {
     const saved = loadMessages();
     if (saved.length > 0) {
       setMessages(saved);
     }
+    setVisionInterval(getStoredVisionInterval());
+    const storedPid = getStoredPersonalityId();
+    setPersonalityId(storedPid);
+    personalityRef.current = storedPid;
+    // Set voice to match personality
+    const p = getPersonality(storedPid);
+    setStoredVoiceId(p.voiceId);
     setMounted(true);
   }, [loadMessages, setMessages]);
 
@@ -205,6 +262,22 @@ export function ChatInterface() {
     setMessages([]);
   }
 
+  function handlePersonalityChange(id: string) {
+    setPersonalityId(id);
+    personalityRef.current = id;
+    setStoredPersonalityId(id);
+    // Auto-switch voice to match personality
+    const p = getPersonality(id);
+    setStoredVoiceId(p.voiceId);
+  }
+
+  function handleVisionIntervalChange(seconds: number) {
+    setVisionInterval(seconds);
+    try {
+      localStorage.setItem('jaisus-vision-interval', String(seconds));
+    } catch { /* */ }
+  }
+
   return (
     <div className="flex flex-col min-h-screen bg-stone-50">
       <div className="flex-1 flex flex-col max-w-md mx-auto w-full">
@@ -221,26 +294,24 @@ export function ChatInterface() {
           <>
             <div className="flex-1" />
 
-            {/* Camera preview — small floating window */}
-            {cameraActive && (
-              <div className="px-4 pb-2">
-                <div className="relative w-24 h-24 rounded-xl overflow-hidden border-2 border-amber-400/50 shadow-lg mx-auto">
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="w-full h-full object-cover mirror"
-                    style={{ transform: 'scaleX(-1)' }}
-                  />
-                  {sceneDescription && (
-                    <div className="absolute bottom-0 inset-x-0 bg-black/60 px-1 py-0.5">
-                      <p className="text-[8px] text-white/80 truncate">{sceneDescription.slice(0, 60)}</p>
-                    </div>
-                  )}
-                </div>
+            {/* Camera preview — small floating window (video always mounted so ref stays connected) */}
+            <div className={`px-4 pb-2 ${cameraActive ? '' : 'hidden'}`}>
+              <div className="relative w-24 h-24 rounded-xl overflow-hidden border-2 border-amber-400/50 shadow-lg mx-auto">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover"
+                  style={{ transform: 'scaleX(-1)' }}
+                />
+                {sceneDescription && (
+                  <div className="absolute bottom-0 inset-x-0 bg-black/60 px-1 py-0.5">
+                    <p className="text-[8px] text-white/80 truncate">{sceneDescription.slice(0, 60)}</p>
+                  </div>
+                )}
               </div>
-            )}
+            </div>
 
             {/* Status indicators */}
             <div className="px-4 py-3 text-center">
@@ -262,9 +333,12 @@ export function ChatInterface() {
               {isSpeaking && (
                 <div className="flex items-center justify-center gap-2 py-2 text-amber-600 text-xs">
                   <div className="flex gap-1">
-                    {[0, 1, 2, 3, 4].map(i => (
-                      <div key={i} className="w-1 rounded-full bg-amber-400 animate-pulse" style={{ height: `${8 + Math.random() * 8}px`, animationDelay: `${i * 0.15}s` }} />
-                    ))}
+                    {[0, 1, 2, 3, 4].map(i => {
+                      const heights = [12, 14, 10, 15, 11];
+                      return (
+                        <div key={i} className="w-1 rounded-full bg-amber-400 animate-pulse" style={{ height: `${heights[i]}px`, animationDelay: `${i * 0.15}s` }} />
+                      );
+                    })}
                   </div>
                   <span>speaking...</span>
                 </div>
@@ -280,6 +354,8 @@ export function ChatInterface() {
                       .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
                       .map(p => p.text)
                       .join('');
+                    // Hide auto-vision ping messages from transcript
+                    if (message.role === 'user' && rawMsgText.startsWith('(') && rawMsgText.endsWith(')')) return null;
                     const displayText = message.role === 'assistant' ? stripAllEmotionTags(rawMsgText).cleanText : rawMsgText;
                     return (
                       <div key={message.id} className={`text-xs ${message.role === 'user' ? 'text-teal-300' : 'text-stone-200'}`}>
@@ -431,6 +507,11 @@ export function ChatInterface() {
         onToggleAutoSpeak={() => setAutoSpeak(!autoSpeak)}
         onClearHistory={handleClearHistory}
         onTestVoice={() => speak('Peace be with you, my friend. I have walked among you for two thousand years.')}
+        visionInterval={visionInterval}
+        onVisionIntervalChange={handleVisionIntervalChange}
+        cameraActive={cameraActive}
+        personalityId={personalityId}
+        onPersonalityChange={handlePersonalityChange}
       />
       <CommunityPlaceholder
         isOpen={activePanel === 'community'}

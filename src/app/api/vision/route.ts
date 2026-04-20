@@ -1,5 +1,3 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-
 export const maxDuration = 15;
 
 const SCENE_PROMPT = `You are the eyes of Jesus Christ. Describe what you see in this camera frame in 1-2 short sentences, focusing on:
@@ -26,23 +24,34 @@ export async function POST(req: Request) {
     // Strip data URL prefix if present (e.g., "data:image/jpeg;base64,...")
     const base64Data = image.includes(',') ? image.split(',')[1] : image;
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    // Use Gemini REST API directly (avoids SDK base64 encoding issues)
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
 
-    const result = await model.generateContent([
-      SCENE_PROMPT,
-      {
-        inlineData: {
-          data: base64Data,
-          mimeType: 'image/jpeg',
-        },
-      },
-    ]);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: SCENE_PROMPT },
+            { inlineData: { mimeType: 'image/jpeg', data: base64Data } },
+          ],
+        }],
+      }),
+    });
 
-    const description = result.response.text();
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error('Gemini API error:', response.status, errorBody);
+      return Response.json({ error: 'Vision analysis failed', details: errorBody }, { status: 500 });
+    }
+
+    const data = await response.json();
+    const description = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     return Response.json({ description });
   } catch (err) {
-    console.error('Vision API error:', err);
-    return Response.json({ error: 'Vision analysis failed' }, { status: 500 });
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error('Vision API error:', errMsg, err);
+    return Response.json({ error: 'Vision analysis failed', details: errMsg }, { status: 500 });
   }
 }
