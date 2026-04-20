@@ -338,20 +338,22 @@ export function ChatInterface() {
           <>
             <div className="flex-1" />
 
-            {/* Camera preview — small floating window (video always mounted so ref stays connected) */}
+            {/* Camera preview + scene caption */}
             <div className={`px-4 pb-2 ${cameraActive ? '' : 'hidden'}`}>
-              <div className="relative w-24 h-24 rounded-xl overflow-hidden border-2 border-amber-400/50 shadow-lg mx-auto">
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-full object-cover"
-                  style={{ transform: 'scaleX(-1)' }}
-                />
+              <div className="flex items-end gap-3 justify-center">
+                <div className="relative w-20 h-20 rounded-xl overflow-hidden border-2 border-amber-400/50 shadow-lg flex-shrink-0">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover"
+                    style={{ transform: 'scaleX(-1)' }}
+                  />
+                </div>
                 {sceneDescription && (
-                  <div className="absolute bottom-0 inset-x-0 bg-black/60 px-1 py-0.5">
-                    <p className="text-[8px] text-white/80 truncate">{sceneDescription.slice(0, 60)}</p>
+                  <div className="bg-stone-800/80 backdrop-blur-sm rounded-xl px-3 py-2 max-w-[220px] shadow-md">
+                    <p className="text-xs text-stone-200 leading-relaxed">{sceneDescription}</p>
                   </div>
                 )}
               </div>
