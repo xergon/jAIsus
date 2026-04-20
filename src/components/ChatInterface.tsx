@@ -61,12 +61,12 @@ export function ChatInterface() {
     api: '/api/chat',
     body: () => {
       const scene = sceneRef.current;
-      const age = Date.now() - sceneTimestampRef.current;
-      // Only include scene if it's less than 30s old
-      const isFresh = scene && sceneTimestampRef.current > 0 && age < 30000;
+      // Always include the latest scene if camera is active — the AI needs
+      // the most current view even if the capture is a few seconds old.
+      // Only omit if there's genuinely no scene at all.
       return {
         personalityId: personalityRef.current,
-        ...(isFresh ? { sceneDescription: scene } : {}),
+        ...(scene ? { sceneDescription: scene } : {}),
       };
     },
   }), []);
@@ -113,6 +113,8 @@ export function ChatInterface() {
   }, [cameraActive, sceneDescription]);
 
   // Recurring auto-vision: periodic prompts while camera is active
+  // Uses a fast tick (2s) but tracks time since last successful ping
+  // so it fires immediately once jAIsus finishes speaking
   useEffect(() => {
     if (!cameraActive || !autoSpeak) return;
 
@@ -124,15 +126,20 @@ export function ChatInterface() {
       '(comment on what is happening around you)',
     ];
     let promptIndex = 0;
+    let lastPingTime = Date.now();
 
     console.log('Auto-vision interval set to', visionInterval, 'seconds');
     const interval = setInterval(() => {
-      // Only send if mounted and not already streaming/processing
       if (!mountedRef.current) return;
-      if (statusRef.current !== 'ready') return;
-      // Only send if we have a scene description
       if (!sceneRef.current) return;
+      // Check if enough time has elapsed since last successful ping
+      const elapsed = (Date.now() - lastPingTime) / 1000;
+      if (elapsed < visionInterval) return;
+      // Wait for ready status — but because we tick every 2s, we'll
+      // catch the moment jAIsus finishes speaking almost immediately
+      if (statusRef.current !== 'ready') return;
 
+      lastPingTime = Date.now();
       const prompt = visionPrompts[promptIndex % visionPrompts.length];
       promptIndex++;
       console.log('Auto-vision ping:', prompt);
@@ -141,7 +148,7 @@ export function ChatInterface() {
       } catch (err) {
         console.warn('Auto-vision sendMessage failed:', err);
       }
-    }, visionInterval * 1000);
+    }, 2000); // Fast tick — actual interval controlled by lastPingTime
 
     return () => clearInterval(interval);
   }, [cameraActive, autoSpeak, visionInterval]);
