@@ -70,7 +70,10 @@ export function useCamera(): UseCameraResult {
     if (!activeRef.current) return;
 
     const frame = captureFrame();
-    if (!frame) return;
+    if (!frame) {
+      console.warn('Vision: no frame captured (video not ready?)');
+      return;
+    }
 
     try {
       const response = await fetch('/api/vision', {
@@ -80,17 +83,23 @@ export function useCamera(): UseCameraResult {
       });
 
       if (!response.ok) {
-        console.warn('Vision API error:', response.status);
+        const body = await response.text();
+        console.error('Vision API error:', response.status, body);
+        setError(`Vision API error: ${response.status}`);
         return;
       }
 
-      const { description } = await response.json();
-      if (description && activeRef.current) {
-        console.log('Scene:', description);
-        setSceneDescription(description);
+      const data = await response.json();
+      if (data.description && activeRef.current) {
+        console.log('Scene:', data.description);
+        setSceneDescription(data.description);
+        setError(null); // Clear any previous vision errors
+      } else if (data.error) {
+        console.error('Vision API returned error:', data.error, data.details);
+        setError(`Vision: ${data.error}`);
       }
     } catch (err) {
-      console.warn('Frame analysis error:', err);
+      console.error('Frame analysis error:', err);
     }
   }, [captureFrame]);
 

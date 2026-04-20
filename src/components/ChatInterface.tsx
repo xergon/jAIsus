@@ -35,6 +35,8 @@ export function ChatInterface() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef<string>('ready');
   const activeMessageIdRef = useRef<string | null>(null);
+  const lastSpokenTextRef = useRef<string>('');
+  const sendMessageRef = useRef(sendMessage);
 
   const { loadMessages, saveMessages, clearHistory } = useChatHistory();
   const { voiceState, startListening, startProcessing, startSpeaking, reset } = useVoiceState();
@@ -65,13 +67,46 @@ export function ChatInterface() {
 
   const { messages, sendMessage, status, setMessages } = useChat({ transport });
 
-  // Auto-vision: every 60s when camera is active, prompt Jesus to react to what he sees
+  // Auto-vision: periodic + immediate first reaction
   const statusRef = useRef(status);
   useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { sendMessageRef.current = sendMessage; }, [sendMessage]);
 
   const mountedRef = useRef(false);
   useEffect(() => { mountedRef.current = mounted; }, [mounted]);
 
+  // Immediate first reaction when camera turns on and first scene arrives
+  const hasReactedToCamera = useRef(false);
+  useEffect(() => {
+    // Reset when camera turns off
+    if (!cameraActive) {
+      hasReactedToCamera.current = false;
+      return;
+    }
+    // Fire once when we get the first scene description
+    if (hasReactedToCamera.current) return;
+    if (!sceneDescription) return;
+    if (!mountedRef.current) return;
+
+    hasReactedToCamera.current = true;
+    console.log('First camera reaction — immediate vision ping');
+
+    // Wait for status to be ready, then send
+    const tryFirst = () => {
+      if (statusRef.current !== 'ready') {
+        setTimeout(tryFirst, 500);
+        return;
+      }
+      try {
+        sendMessageRef.current({ text: '(You just opened your eyes and can see the user for the first time. React with excitement and warmth to what you see!)' });
+      } catch (err) {
+        console.warn('Immediate vision sendMessage failed:', err);
+      }
+    };
+    tryFirst();
+  }, [cameraActive, sceneDescription]);
+
+  // Recurring auto-vision: periodic prompts while camera is active
   useEffect(() => {
     if (!cameraActive || !autoSpeak) return;
 
@@ -96,14 +131,14 @@ export function ChatInterface() {
       promptIndex++;
       console.log('Auto-vision ping:', prompt);
       try {
-        sendMessage({ text: prompt });
+        sendMessageRef.current({ text: prompt });
       } catch (err) {
         console.warn('Auto-vision sendMessage failed:', err);
       }
     }, visionInterval * 1000);
 
     return () => clearInterval(interval);
-  }, [cameraActive, autoSpeak, sendMessage, visionInterval]);
+  }, [cameraActive, autoSpeak, visionInterval]);
 
   // Load history + settings on mount
   useEffect(() => {
@@ -147,6 +182,13 @@ export function ChatInterface() {
     }
 
     if (status === 'streaming' && activeMessageIdRef.current !== lastMessage.id) {
+      // Dedup: if the AI SDK replaces the message object with a new ID but same text, don't re-speak
+      if (fullText && fullText === lastSpokenTextRef.current) {
+        activeMessageIdRef.current = lastMessage.id;
+        // Skip — already spoken this exact text
+        prevStatusRef.current = status;
+        return;
+      }
       activeMessageIdRef.current = lastMessage.id;
       setSpeakingMessageId(lastMessage.id);
       startSpeaking();
@@ -179,6 +221,7 @@ export function ChatInterface() {
         queueSentence(remaining);
       }
       queueSentence(null);
+      lastSpokenTextRef.current = fullText; // Track for dedup
       spokenLengthRef.current = 0;
     }
 
