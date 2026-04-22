@@ -98,49 +98,69 @@ export function useSpeechRecognition(
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
 
-    // continuous = false: browser handles end-of-speech detection naturally.
-    // This is the most reliable mode across browsers and mobile.
-    recognition.continuous = false;
+    // continuous = true: we manage end-of-speech via a silence timeout.
+    // This prevents Chrome from cutting off mid-sentence on brief pauses.
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
     submittedRef.current = false;
+
+    // Silence timeout: submit after 2s of no new speech activity
+    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+    let accumulatedText = '';
+
+    function resetSilenceTimer() {
+      if (silenceTimer) clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(() => {
+        // 2s of silence — submit what we have and stop
+        if (!submittedRef.current && accumulatedText.trim()) {
+          submittedRef.current = true;
+          const text = accumulatedText.trim();
+          console.log('Speech silence timeout submit:', text);
+          setTranscript(text);
+          setInterimTranscript('');
+          lastInterimRef.current = '';
+          onResultRef.current?.(text);
+        }
+        try { recognition.stop(); } catch { /* */ }
+      }, 2000);
+    }
 
     recognition.onstart = () => {
       setIsListening(true);
       setTranscript('');
       setInterimTranscript('');
       setError(null);
+      accumulatedText = '';
+      resetSilenceTimer();
     };
 
     recognition.onresult = (event) => {
-      let interim = '';
-      let finalText = '';
+      if (submittedRef.current) return;
 
-      for (let i = event.resultIndex; i < event.results.length; i++) {
+      // Rebuild full transcript from all results
+      let full = '';
+      let interim = '';
+      for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i];
         if (result.isFinal) {
-          finalText += result[0].transcript;
+          full += result[0].transcript;
         } else {
           interim += result[0].transcript;
         }
       }
 
-      if (finalText && !submittedRef.current) {
-        // Browser decided the utterance is complete — submit immediately
-        submittedRef.current = true;
-        lastInterimRef.current = '';
-        setTranscript(finalText);
-        setInterimTranscript('');
-        console.log('Speech final result:', finalText);
-        onResultRef.current?.(finalText);
-      } else {
-        setInterimTranscript(interim);
-        lastInterimRef.current = interim;
-      }
+      accumulatedText = full + interim;
+      setInterimTranscript(accumulatedText);
+      lastInterimRef.current = accumulatedText;
+
+      // Reset silence timer — user is still talking
+      resetSilenceTimer();
     };
 
     recognition.onerror = (event) => {
       console.warn('Speech recognition error:', event.error);
+      if (silenceTimer) clearTimeout(silenceTimer);
       if (event.error === 'not-allowed') {
         setError('Microphone access denied. Please allow microphone access in your browser settings.');
       } else if (event.error === 'no-speech') {
@@ -153,10 +173,10 @@ export function useSpeechRecognition(
     };
 
     recognition.onend = () => {
-      // If recognition ended without a final result (e.g., browser timeout),
-      // submit whatever interim text we have as a fallback.
-      if (!submittedRef.current && lastInterimRef.current.trim()) {
-        const text = lastInterimRef.current.trim();
+      if (silenceTimer) clearTimeout(silenceTimer);
+      // If recognition ended without submitting, submit whatever we have
+      if (!submittedRef.current && accumulatedText.trim()) {
+        const text = accumulatedText.trim();
         console.log('Speech onend fallback submit:', text);
         submittedRef.current = true;
         lastInterimRef.current = '';

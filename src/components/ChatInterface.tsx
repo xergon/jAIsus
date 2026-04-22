@@ -434,8 +434,34 @@ export function ChatInterface() {
               </div>
             )}
 
-            {/* Floating buttons: settings, mic, camera, transcript */}
-            <div className="sticky bottom-0 bg-transparent px-4 py-4">
+            {/* Floating buttons + text input: settings, mic, camera, transcript */}
+            <div className="sticky bottom-0 bg-stone-50/90 backdrop-blur-sm px-4 py-3">
+              {/* Text input row — always visible for keyboard questions */}
+              <form onSubmit={handleTextSubmit} className="flex items-center gap-2 mb-2">
+                <input
+                  type="text"
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  disabled={status !== 'ready'}
+                  placeholder="Type your question..."
+                  className="flex-1 rounded-full border border-stone-300 bg-white px-4 py-2 text-sm
+                    focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent
+                    disabled:opacity-50"
+                />
+                {input.trim() && (
+                  <button
+                    type="submit"
+                    disabled={status !== 'ready'}
+                    className="w-9 h-9 rounded-full bg-teal-500 text-white flex items-center justify-center active:scale-95 transition-transform shadow-sm disabled:opacity-50"
+                    aria-label="Send"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                    </svg>
+                  </button>
+                )}
+              </form>
+
               <div className="flex items-center justify-center gap-3">
                 {/* Settings */}
                 <button
