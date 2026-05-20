@@ -151,14 +151,30 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
     va.addEventListener('resize', revealVideo);
     va.addEventListener('loadeddata', revealVideo);
     va.addEventListener('canplay', revealVideo);
-    // Safety: reveal after 3s no matter what (prevents permanent black screen)
-    setTimeout(() => {
-      if (!revealed && va) {
-        revealed = true;
-        va.style.visibility = 'visible';
-        setVideoReady(true);
+
+    // Safety: only reveal if dimensions are actually ready.
+    // Previous version revealed even with videoWidth===0, which caused the
+    // first-load distortion (Chrome paints a 0-sized element stretched).
+    // Now we retry every 500ms up to 12s, and only reveal when ready.
+    let safetyTries = 0;
+    const safetyInterval = setInterval(() => {
+      if (revealed || !va) {
+        clearInterval(safetyInterval);
+        return;
       }
-    }, 3000);
+      safetyTries++;
+      if (va.videoWidth > 0 && va.videoHeight > 0) {
+        clearInterval(safetyInterval);
+        revealVideo();
+      } else if (safetyTries >= 24) {
+        // 12s gone and still no dimensions — give up on video, fall back
+        clearInterval(safetyInterval);
+        if (mountedRef.current) {
+          console.warn('Video failed to decode after 12s — falling back to canvas');
+          setMode('canvas');
+        }
+      }
+    }, 500);
 
     va.play().catch(() => {
       // Autoplay blocked — wait a beat then reveal the still frame
@@ -284,6 +300,7 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
 
     return () => {
       clearInterval(stallWatchdog);
+      clearInterval(safetyInterval);
       va.removeEventListener('timeupdate', onTimeUpdate);
       vb.removeEventListener('timeupdate', onTimeUpdate);
       va.removeEventListener('ended', onEnded);
