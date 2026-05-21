@@ -42,6 +42,7 @@ import { useVoiceActivityDetection } from '@/hooks/useVoiceActivityDetection';
 import { VADConsentPrompt, getVADConsent, setVADConsent, type VADConsent } from './VADConsentPrompt';
 import { NotificationOptInPrompt, hasSeenNotificationPrompt } from './NotificationOptInPrompt';
 import { VoiceMemoModal } from './VoiceMemoModal';
+import { SavedMemosPanel } from './SavedMemosPanel';
 
 export function ChatInterface() {
   const [input, setInput] = useState('');
@@ -930,6 +931,20 @@ export function ChatInterface() {
           picked in the personality switcher is the one reflecting back. */}
       <VoiceMemoModal
         isOpen={activePanel === 'voice-memo'}
+        onClose={() => setActivePanel('none')}
+        onSpeak={speak}
+        onStopSpeaking={stopSpeaking}
+        isSpeaking={isSpeaking}
+        onOpenSaved={() => setActivePanel('saved-memos')}
+      />
+
+      {/* Saved memos list — reactive to MEMOS_CHANGED_EVENT + cross-tab
+          storage, so new memos appear instantly. Listen replays the
+          response in the currently-active personality voice (the voice
+          that was active at record time is intentionally NOT carried —
+          the user picks their guide today, not historically). */}
+      <SavedMemosPanel
+        isOpen={activePanel === 'saved-memos'}
         onClose={() => setActivePanel('none')}
         onSpeak={speak}
         onStopSpeaking={stopSpeaking}

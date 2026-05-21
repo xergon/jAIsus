@@ -129,17 +129,20 @@ export function ActionButtons({ onAskQuestion, onOpenPanel }: ActionButtonsProps
           <span className="text-lg leading-none" aria-hidden="true">✨</span>
           Memories
         </button>
+        {/* "Reflect" instead of "Voice Memo" — better captures what the
+            feature actually does (record a thought, get a structured
+            reflection back), and matches the in-modal copy. Audit UX H2. */}
         <button
           onClick={tap(() => onOpenPanel('voice-memo'))}
           className="flex flex-col items-center gap-1 rounded-xl bg-white border border-stone-200 px-2 py-2.5 text-xs font-medium text-stone-600 active:scale-[0.97] transition-transform shadow-sm"
-          aria-label="Voice memo"
+          aria-label="Record a reflection"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="9" y="2" width="6" height="12" rx="3" />
             <path d="M5 10a7 7 0 0 0 14 0" />
             <line x1="12" y1="19" x2="12" y2="22" />
           </svg>
-          Voice Memo
+          Reflect
         </button>
       </div>
     </div>

@@ -15,6 +15,9 @@ interface VoiceMemoModalProps {
   onSpeak: (text: string) => void;
   onStopSpeaking: () => void;
   isSpeaking: boolean;
+  /** Called after save — opens the Saved Memos panel so the user can see
+   *  what they just kept. Removes the "stranded memo" UX trap. */
+  onOpenSaved?: () => void;
 }
 
 interface Reflection {
@@ -51,14 +54,29 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpeaking }: VoiceMemoModalProps) {
+export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpeaking, onOpenSaved }: VoiceMemoModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalA11y({ isOpen, onClose, ref: dialogRef });
   const { vibrate } = useHaptics();
 
   const [screen, setScreen] = useState<ScreenState>({ kind: 'idle' });
+  // Confirm-then-execute for Cancel when >30s of audio is at stake.
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const cancelConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // After ~6s of processing we swap reassurance copy; after ~20s, swap again.
+  // This lives in state so the render reflects the message change.
+  const [processingHint, setProcessingHint] = useState<0 | 1 | 2>(0);
   // Track in-flight processing so we can cancel cleanly on close.
   const abortRef = useRef<AbortController | null>(null);
+  // Refs so the close-cleanup effect can depend ONLY on isOpen (audit H1).
+  // The recorder object identity changes every render of this component, so
+  // depending on it would re-arm the cleanup effect 60× per second during a
+  // recording (level meter writes setLevel). Refs let us read the latest
+  // values without triggering re-runs.
+  const isSpeakingRef = useRef(isSpeaking);
+  const onStopSpeakingRef = useRef(onStopSpeaking);
+  useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
+  useEffect(() => { onStopSpeakingRef.current = onStopSpeaking; }, [onStopSpeaking]);
 
   const submitRecording = useCallback(async (result: { blob: Blob; mimeType: string; durationSec: number }) => {
     setScreen({ kind: 'processing', durationSec: result.durationSec });
@@ -110,25 +128,102 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
     onComplete: submitRecording,
     onError,
   });
+  // Stable ref to the recorder so the close-cleanup effect can depend on isOpen only.
+  const recorderRef = useRef(recorder);
+  useEffect(() => { recorderRef.current = recorder; }, [recorder]);
 
-  // Reset state every time the modal opens fresh.
+  // Sync the modal's `screen` from the hook's `recorder.state` for the
+  // transient 'requesting'/'recording' window. If the user dismisses the
+  // mic permission prompt, the hook returns to 'idle' and we want the modal
+  // to follow — otherwise we'd be stuck showing the recording UI for a
+  // recording that never began (audit C1).
   useEffect(() => {
-    if (!isOpen) {
-      // Abort an in-flight upload + stop any active TTS so close feels instant.
-      abortRef.current?.abort();
-      abortRef.current = null;
-      if (recorder.state !== 'idle') recorder.cancel();
-      if (isSpeaking) onStopSpeaking();
+    if (!isOpen) return;
+    if (screen.kind !== 'recording') return;
+    // If the recorder dropped back to idle (permission denied, mic in use,
+    // or any sync error in the hook), unstick the modal.
+    if (recorder.state === 'idle') {
       setScreen({ kind: 'idle' });
     }
-  }, [isOpen, recorder, isSpeaking, onStopSpeaking]);
+  }, [recorder.state, screen.kind, isOpen]);
+
+  // Reset state every time the modal CLOSES. Depends only on isOpen so it
+  // doesn't fire 60× per second during recording (audit H1).
+  useEffect(() => {
+    if (isOpen) return;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (recorderRef.current.state !== 'idle') recorderRef.current.cancel();
+    if (isSpeakingRef.current) onStopSpeakingRef.current();
+    setScreen({ kind: 'idle' });
+    setConfirmingCancel(false);
+    setProcessingHint(0);
+    if (cancelConfirmTimerRef.current) {
+      clearTimeout(cancelConfirmTimerRef.current);
+      cancelConfirmTimerRef.current = null;
+    }
+  }, [isOpen]);
+
+  // Rotate processing-screen copy at 6s and 20s so the user doesn't think
+  // the request hung. Tied to screen.kind so it resets cleanly when we
+  // leave the processing state.
+  useEffect(() => {
+    if (screen.kind !== 'processing') {
+      setProcessingHint(0);
+      return;
+    }
+    const t6 = setTimeout(() => setProcessingHint(1), 6_000);
+    const t20 = setTimeout(() => setProcessingHint(2), 20_000);
+    return () => {
+      clearTimeout(t6);
+      clearTimeout(t20);
+    };
+  }, [screen.kind]);
+
+  // When the screen state changes mid-modal (recording → processing →
+  // result), focus may be on a button that just unmounted, leaving the
+  // SR user dropped out of the dialog. Re-trap by focusing the first
+  // focusable element in the dialog (audit M4).
+  useEffect(() => {
+    if (!isOpen) return;
+    const root = dialogRef.current;
+    if (!root) return;
+    if (root.contains(document.activeElement)) return;
+    const focusables = root.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [tabindex]:not([tabindex="-1"]), input, select, textarea'
+    );
+    focusables[0]?.focus();
+  }, [screen.kind, isOpen]);
+
+  // On iOS, opening the modal while the chat textarea is focused leaves the
+  // keyboard up — and since the modal slides up to `items-end`, it ends up
+  // BEHIND the keyboard. Blur the active element when we open (audit UX H3).
+  useEffect(() => {
+    if (!isOpen) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body) {
+      active.blur();
+    }
+  }, [isOpen]);
+
+  // Cleanup pending cancel-confirm timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (cancelConfirmTimerRef.current) clearTimeout(cancelConfirmTimerRef.current);
+    };
+  }, []);
 
   if (!isOpen) return null;
 
   const handleStart = async () => {
+    // Guard against re-entry — useAudioRecorder also no-ops if state !== 'idle'
+    // but checking here avoids the brief screen-flicker if the user double-taps.
+    if (recorder.state !== 'idle') return;
     vibrate('medium');
     setScreen({ kind: 'recording' });
     await recorder.start();
+    // If start() bailed (permission denied, unsupported), the hook stayed in
+    // 'idle'. The screen-sync effect above will pull us back to idle.
   };
 
   const handleStop = () => {
@@ -137,7 +232,24 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
   };
 
   const handleCancel = () => {
+    // Two-tap confirm if there's meaningful audio at stake (audit UX M3).
+    const elapsedSec = recorder.elapsedSec;
+    if (elapsedSec >= 30 && !confirmingCancel) {
+      vibrate('warning');
+      setConfirmingCancel(true);
+      if (cancelConfirmTimerRef.current) clearTimeout(cancelConfirmTimerRef.current);
+      cancelConfirmTimerRef.current = setTimeout(() => {
+        setConfirmingCancel(false);
+        cancelConfirmTimerRef.current = null;
+      }, 3000);
+      return;
+    }
+    if (cancelConfirmTimerRef.current) {
+      clearTimeout(cancelConfirmTimerRef.current);
+      cancelConfirmTimerRef.current = null;
+    }
     vibrate('tap');
+    setConfirmingCancel(false);
     recorder.cancel();
     setScreen({ kind: 'idle' });
   };
@@ -152,10 +264,18 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
       response: screen.reflection.response,
     });
     if (saved) {
-      toast.success('Memo saved');
+      // Route the user to the saved-memos panel via the parent so they can
+      // see what they just kept — closes the audit UX C1 "stranded memo" gap.
+      // Toast offers a quick way back in case they ignore the panel transition.
       track('memo.saved');
       if (isSpeaking) onStopSpeaking();
-      onClose();
+      if (onOpenSaved) {
+        toast.success('Memo saved');
+        onOpenSaved();
+      } else {
+        toast.success('Memo saved');
+        onClose();
+      }
     } else {
       toast.error("Couldn't save — storage may be full.");
     }
@@ -170,9 +290,10 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
     if (screen.kind !== 'result') return;
     if (isSpeaking) {
       onStopSpeaking();
+      track('memo.listen.stop');
     } else {
       onSpeak(screen.reflection.response);
-      track('memo.listened');
+      track('memo.listen.play');
     }
   };
 
@@ -200,7 +321,7 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
         <div className="flex-1 overflow-y-auto modal-scroll px-5 pb-6">
           {/* IDLE */}
           {screen.kind === 'idle' && (
-            <div className="flex flex-col items-center justify-center py-12 gap-6">
+            <div className="flex flex-col items-center justify-center py-12 gap-5">
               <div className="text-center max-w-xs">
                 <div className="text-5xl mb-3" aria-hidden="true">🎙️</div>
                 <p className="text-sm text-stone-600">
@@ -216,6 +337,18 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
               >
                 <span className="block w-6 h-6 rounded-full bg-white" aria-hidden="true" />
               </button>
+              {/* Visible CTA label — audit UX H1: first-time users see an
+                  unlabeled red button and don't know what to do. */}
+              <p className="text-xs font-medium text-stone-500">Tap to start</p>
+              {onOpenSaved && (
+                <button
+                  type="button"
+                  onClick={onOpenSaved}
+                  className="text-xs text-teal-700 underline-offset-2 hover:underline active:scale-[0.98]"
+                >
+                  View saved memos
+                </button>
+              )}
               {!recorder.isSupported && (
                 <p className="text-xs text-stone-500 max-w-xs text-center">
                   Audio recording isn&apos;t supported in this browser. Try Chrome or Safari.
@@ -258,9 +391,14 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
                 <button
                   type="button"
                   onClick={handleCancel}
-                  className="rounded-xl border border-stone-200 px-5 py-2.5 text-sm font-medium text-stone-600 active:scale-[0.98]"
+                  className={`rounded-xl px-5 py-2.5 text-sm font-medium active:scale-[0.98] ${
+                    confirmingCancel
+                      ? 'bg-rose-100 border border-rose-300 text-rose-700 font-semibold'
+                      : 'border border-stone-200 text-stone-600'
+                  }`}
+                  aria-label={confirmingCancel ? 'Confirm discard recording' : 'Cancel recording'}
                 >
-                  Cancel
+                  {confirmingCancel ? 'Tap again to discard' : 'Cancel'}
                 </button>
                 <button
                   type="button"
@@ -279,7 +417,10 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
 
           {/* PROCESSING */}
           {screen.kind === 'processing' && (
-            <div className="flex flex-col items-center justify-center py-16 gap-4">
+            <div
+              className="flex flex-col items-center justify-center py-16 gap-4"
+              aria-live="polite"
+            >
               <div className="flex gap-1.5">
                 {[0, 1, 2].map(i => (
                   <div
@@ -289,7 +430,13 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
                   />
                 ))}
               </div>
-              <p className="text-sm text-stone-600">Transcribing and reflecting…</p>
+              {/* Rotating reassurance copy — long memos can take 20s+, so we
+                  give the user a sign the request hasn't hung (audit UX M2). */}
+              <p className="text-sm text-stone-600">
+                {processingHint === 0 && 'Transcribing and reflecting…'}
+                {processingHint === 1 && 'Almost there — long memos take a moment.'}
+                {processingHint === 2 && 'Still working — listening deeply takes time.'}
+              </p>
               <p className="text-[11px] text-stone-400">{fmtTime(screen.durationSec)} memo</p>
             </div>
           )}
@@ -374,12 +521,14 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
             <div className="flex flex-col items-center justify-center py-12 gap-4 text-center">
               <div className="text-4xl" aria-hidden="true">⚠️</div>
               <p className="text-sm text-stone-700 max-w-xs">{screen.message}</p>
+              {/* "Start over" is clearer than "Try again" — the previous
+                  recording is gone; this returns to the idle screen (audit UX L2). */}
               <button
                 type="button"
                 onClick={() => setScreen({ kind: 'idle' })}
                 className="rounded-xl bg-teal-500 text-white px-5 py-2.5 text-sm font-medium active:scale-[0.98]"
               >
-                Try again
+                Start over
               </button>
             </div>
           )}

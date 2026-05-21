@@ -66,7 +66,6 @@ export function useAudioRecorder({
 
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
   const startTimeRef = useRef(0);
   const tickIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const maxTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -78,7 +77,6 @@ export function useAudioRecorder({
   const cancelledRef = useRef(false);
   const onCompleteRef = useRef(onComplete);
   const onErrorRef = useRef(onError);
-  const mimeTypeRef = useRef('');
 
   // Keep callback refs fresh without re-creating start/stop.
   useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
@@ -102,7 +100,15 @@ export function useAudioRecorder({
     if (sourceNodeRef.current) { try { sourceNodeRef.current.disconnect(); } catch { /* */ } sourceNodeRef.current = null; }
     if (analyserRef.current) { try { analyserRef.current.disconnect(); } catch { /* */ } analyserRef.current = null; }
     if (audioContextRef.current) {
-      try { audioContextRef.current.close(); } catch { /* */ }
+      // close() returns a Promise that can reject async (e.g. on iOS Safari
+      // when contexts are mid-suspend) — swallow the rejection so it doesn't
+      // surface as an unhandled-promise warning. Audit H3.
+      try {
+        const closePromise = audioContextRef.current.close();
+        if (closePromise && typeof closePromise.catch === 'function') {
+          closePromise.catch(() => { /* */ });
+        }
+      } catch { /* sync throw is rare but ignored too */ }
       audioContextRef.current = null;
     }
     if (streamRef.current) {
@@ -117,7 +123,6 @@ export function useAudioRecorder({
     setError(null);
     setState('requesting');
     cancelledRef.current = false;
-    chunksRef.current = [];
     const gen = ++generationRef.current;
 
     let stream: MediaStream;
@@ -144,7 +149,6 @@ export function useAudioRecorder({
 
     streamRef.current = stream;
     const mimeType = pickMimeType();
-    mimeTypeRef.current = mimeType;
 
     let recorder: MediaRecorder;
     try {
@@ -160,12 +164,17 @@ export function useAudioRecorder({
     }
 
     recorderRef.current = recorder;
+    // Audit C2: capture chunks + mimeType in per-recording closure rather
+    // than module-level refs. This eliminates the entire class of "stale
+    // onstop fires after a new start() reset the refs" bugs.
+    const myChunks: Blob[] = [];
+    const myMimeType = mimeType || 'audio/webm';
     recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      if (e.data && e.data.size > 0) myChunks.push(e.data);
     };
     recorder.onstop = () => {
       const myGen = generationRef.current;
-      const blob = new Blob(chunksRef.current, { type: mimeTypeRef.current || 'audio/webm' });
+      const blob = new Blob(myChunks, { type: myMimeType });
       const duration = Math.max(0, (Date.now() - startTimeRef.current) / 1000);
       const wasCancelled = cancelledRef.current;
       tearDown();
@@ -174,7 +183,7 @@ export function useAudioRecorder({
       setElapsedSec(0);
       if (gen !== myGen) return; // newer recording started, drop this result
       if (!wasCancelled) {
-        onCompleteRef.current?.({ blob, mimeType: mimeTypeRef.current || 'audio/webm', durationSec: duration });
+        onCompleteRef.current?.({ blob, mimeType: myMimeType, durationSec: duration });
       }
     };
     recorder.onerror = (e) => {
@@ -198,7 +207,11 @@ export function useAudioRecorder({
       analyserRef.current = analyser;
 
       const buf = new Uint8Array(analyser.fftSize);
+      // Capture generation in closure so a frame queued just before
+      // tearDown can't fire setLevel against a stale hook (audit H2).
+      const myGen = gen;
       const tick = () => {
+        if (myGen !== generationRef.current) return;
         const a = analyserRef.current;
         if (!a) return;
         a.getByteTimeDomainData(buf);
