@@ -26,12 +26,16 @@ import { DailyVerse } from './DailyVerse';
 import { DailyKindness } from './DailyKindness';
 import { GreetingHeader } from './GreetingHeader';
 import { FavoritesPanel } from './FavoritesPanel';
+import { MemoriesPanel } from './MemoriesPanel';
+import { SearchPanel } from './SearchPanel';
+import { SpeakingHint } from './SpeakingHint';
 import { PersonalitySwitcher } from './PersonalitySwitcher';
 import { StreakBadge } from './StreakBadge';
 import { MoodSelector } from './MoodSelector';
 import { hasSeenOnboarding, markOnboardingSeen } from '@/lib/onboarding';
 import { track } from '@/lib/analytics';
 import { useConversationMemory } from '@/hooks/useConversationMemory';
+import { memoriesAsContext } from '@/lib/conversation-memory';
 
 export function ChatInterface() {
   const [input, setInput] = useState('');
@@ -43,6 +47,11 @@ export function ChatInterface() {
   const [currentEmotion, setCurrentEmotion] = useState<Emotion>('neutral');
   const [visionInterval, setVisionInterval] = useState(60);
   const [personalityId, setPersonalityId] = useState('mushroom-guru');
+  // iOS soft-keyboard offset. visualViewport shrinks when the keyboard opens;
+  // we add that gap to the input container's padding-bottom so the text input
+  // doesn't get hidden behind the keyboard. Skipped if visualViewport is
+  // unsupported (older browsers — they get the original layout).
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const personalityRef = useRef('mushroom-guru');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef<string>('ready');
@@ -64,17 +73,46 @@ export function ChatInterface() {
   const sceneRef = useRef<string | null>(null);
   useEffect(() => { sceneRef.current = sceneDescription; }, [sceneDescription]);
 
+  // iOS mobile-keyboard fix: when the soft keyboard opens, the visualViewport
+  // shrinks but window.innerHeight stays the same. We compute the delta and
+  // push that as padding-bottom on the sticky input container so the text
+  // field rises above the keyboard. Guarded so older browsers (no visualViewport)
+  // skip this entirely.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+
+    const update = () => {
+      const offset = Math.max(0, window.innerHeight - vv.height);
+      setKeyboardHeight(offset);
+    };
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }, []);
+
   // Transport with dynamic body — reads sceneRef and personalityRef on each request
   const transport = useMemo(() => new DefaultChatTransport({
     api: '/api/chat',
     body: () => {
       const scene = sceneRef.current;
+      // memoriesAsContext() reads localStorage on every call, so we invoke it
+      // INSIDE the body callback (not at component mount) — that way each new
+      // request sees the latest memories. Cap at 5 to keep the system prompt
+      // size reasonable; the server applies its own 4000-char safety net.
+      const memoryContext = memoriesAsContext(5);
       // Always include the latest scene if camera is active — the AI needs
       // the most current view even if the capture is a few seconds old.
       // Only omit if there's genuinely no scene at all.
       return {
         personalityId: personalityRef.current,
         ...(scene ? { sceneDescription: scene } : {}),
+        ...(memoryContext ? { memoryContext } : {}),
       };
     },
   }), []);
@@ -489,7 +527,10 @@ export function ChatInterface() {
             )}
 
             {/* Floating buttons + text input: settings, mic, camera, transcript */}
-            <div className="sticky bottom-0 bg-stone-50/90 backdrop-blur-sm px-4 py-3">
+            <div
+              className="sticky bottom-0 bg-stone-50/90 backdrop-blur-sm px-4 py-3"
+              style={keyboardHeight > 0 ? { paddingBottom: 12 + keyboardHeight } : undefined}
+            >
               {/* Text input row — always visible for keyboard questions */}
               <form onSubmit={handleTextSubmit} className="flex items-center gap-2 mb-2">
                 <input
@@ -624,7 +665,10 @@ export function ChatInterface() {
               <div ref={chatEndRef} />
             </div>
 
-            <div className="sticky bottom-0 bg-stone-50/95 backdrop-blur-sm border-t border-stone-200 px-4 py-3">
+            <div
+              className="sticky bottom-0 bg-stone-50/95 backdrop-blur-sm border-t border-stone-200 px-4 py-3"
+              style={keyboardHeight > 0 ? { paddingBottom: 12 + keyboardHeight } : undefined}
+            >
               <form onSubmit={handleTextSubmit} className="flex items-center gap-2">
                 <input
                   type="text"
@@ -690,6 +734,23 @@ export function ChatInterface() {
         isOpen={activePanel === 'favorites'}
         onClose={() => setActivePanel('none')}
         onAskAgain={(text) => sendMessage({ text })}
+      />
+      <MemoriesPanel
+        isOpen={activePanel === 'memories'}
+        onClose={() => setActivePanel('none')}
+      />
+      <SearchPanel
+        isOpen={activePanel === 'search'}
+        onClose={() => setActivePanel('none')}
+        onAskAbout={(text) => sendMessage({ text })}
+      />
+
+      {/* SpeakingHint lives at the root, outside the scrollable chat container,
+          so its `fixed` positioning is anchored to the viewport (not clipped
+          by an ancestor's overflow). */}
+      <SpeakingHint
+        voiceState={voiceState}
+        onInterrupt={() => stopSpeaking()}
       />
     </div>
   );

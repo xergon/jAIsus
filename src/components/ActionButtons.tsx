@@ -58,7 +58,18 @@ export function ActionButtons({ onAskQuestion, onOpenPanel }: ActionButtonsProps
         </button>
       </div>
 
-      {/* Second row: Saved (favorites), Community, Settings — compact 3-column */}
+      {/*
+        Bottom utility section: TWO 3-col rows.
+        Layout choice (375px viewport): we considered a single 5-col compact row
+        but at 375px – 32px container padding – 4 × 8px gaps that leaves ~60px
+        per cell, which makes labels like "Community" and "Memories" wrap or
+        feel cramped. A 4-col row forces dropping one of the existing entries
+        (Community has no other home in the UI). Two 3-col rows reuse the
+        existing button styling exactly, keep labels comfortably readable, and
+        leave the second row with one balanced empty slot — visually fine since
+        the rows are stacked. Existing row preserved as-is to avoid breaking
+        muscle memory; Search + Memories sit in a fresh second utility row.
+      */}
       <div className="grid grid-cols-3 gap-2">
         <button
           onClick={tap(() => onOpenPanel('favorites'))}
@@ -91,6 +102,29 @@ export function ActionButtons({ onAskQuestion, onOpenPanel }: ActionButtonsProps
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
           Settings
+        </button>
+      </div>
+
+      {/* Third row: Search + Memories. Mirrors the third row's button styling. */}
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          onClick={tap(() => onOpenPanel('search'))}
+          className="flex flex-col items-center gap-1 rounded-xl bg-white border border-stone-200 px-2 py-2.5 text-xs font-medium text-stone-600 active:scale-[0.97] transition-transform shadow-sm"
+          aria-label="Search"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" />
+          </svg>
+          Search
+        </button>
+        <button
+          onClick={tap(() => onOpenPanel('memories'))}
+          className="flex flex-col items-center gap-1 rounded-xl bg-white border border-stone-200 px-2 py-2.5 text-xs font-medium text-stone-600 active:scale-[0.97] transition-transform shadow-sm"
+          aria-label="Memories"
+        >
+          <span className="text-lg leading-none" aria-hidden="true">✨</span>
+          Memories
         </button>
       </div>
     </div>

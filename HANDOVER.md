@@ -1,6 +1,6 @@
 # jAIsus — Complete Handover Document
 
-**Last updated**: 2026-04-27
+**Last updated**: 2026-04-28
 **Repo**: github.com/xergon/jAIsus
 **Live**: https://jaisus.vercel.app
 **Deploy**: Auto-deploy from `main` via Vercel (GitHub integration)
@@ -160,6 +160,41 @@ Wave 8 added infrastructure plumbing: a service worker for offline / app-shell c
 
 ---
 
+## Recent Additions — Wave 10 + 11 (Memories panel, search, speaking hint, server-side memory)
+
+Wave 10 added three new user-facing panels for browsing/searching/discovery. Wave 11 was a comprehensive wire-up pass that landed server-side memory (the long-promised cross-session continuity) and connected long-press menus + the keyboard-aware input. After Wave 11, jAIsus actually carries a thread of memory across sessions instead of just persisting summaries locally.
+
+### New components (`src/components/`)
+- **`MemoriesPanel.tsx`** — slide-up drawer (`role="dialog"`, `useModalA11y`) listing every saved conversation memory. Each row has a personality chip (emoji + name), a relative date label (`today` / `yesterday` / `N days ago` / `N weeks ago` / formatted date), the one-sentence summary, a message-count badge, and a per-row remove button. Header "Clear all" is a two-tap confirm with a 3s timeout (tap once → "Sure? Tap again to confirm" → tap again or wait → reset). `now` is pinned in state and only refreshed when the panel opens so relative times don't churn on every render. Empty state shows "No memories yet" via `EmptyState`.
+- **`SearchPanel.tsx`** — slide-up drawer with a search input that queries across chat history + favorites + parables via the new `search.ts` lib. 150ms debounce on typing; explicit quick-tip chips ("Try searching for 'love'") skip the debounce. Each result has a colour-coded source chip (`chat` blue, `favorite` rose, `parable` amber), a context label, and the matched excerpt with `<mark>`-highlighted terms (pure JSX `HighlightedText` — no `dangerouslySetInnerHTML`). Chat results are clickable and trigger `onAskAbout` (which sends the text back to chat). Auto-focuses the search input on open via `requestAnimationFrame` so the slide-in finishes before the mobile keyboard pops. `aria-busy={isDebouncing}` + `role="region" aria-live="polite"` for screen readers.
+- **`SpeakingHint.tsx`** — discreet "Tap to interrupt" pill that surfaces near the bottom of the screen while jAIsus is speaking. Capped at **3 appearances per page-load session** (after the user's learned, stop nagging) and auto-hides after **4 seconds** even if speech continues. Fades in via `scale-90 → scale-100` + opacity, fades out with the same. Respects `prefers-reduced-motion: reduce` (instant show/hide). Tap fires `onInterrupt?.()` and hides immediately. Tracks the rising edge of `voiceState === 'speaking'` with a ref so it shows once per speech session up to the cap; resets the rising-edge gate when speech ends so the next session can show again. Lives at the chat root, outside the scrollable container, so its `fixed` positioning anchors to the viewport.
+
+### New libs (`src/lib/`)
+- **`search.ts`** — pure indexing + ranking over the three local data sources. No precomputed index (datasets are small: ≤100 messages, ≤200 favorites, ~50 parables — search is O(N) per call and that's fine). Public API: `searchAll(query)` returns `SearchResult[]`, capped at 50. Each result has `{id, source, text, context?, timestamp?, score}`. Scoring: term frequency × source weight (`chat: 2.0`, `favorite: 1.5`, `parable: 1.0`), plus an **exponential recency decay** on chat results (14-day half-life, floored at 0.4× so a six-month-old gold match doesn't disappear). Query is split on whitespace and ALL terms must appear in the searchable text (AND semantics). Excerpting centers the window on the first match and snaps to nearby word boundaries. Reads localStorage fresh on every call — no subscriptions, no stale state. Also exports `highlightMatches(text, query)` for callers that prefer `dangerouslySetInnerHTML` (SearchPanel uses a JSX-based highlighter instead).
+
+### Wire-ups in existing files
+
+- **`chat/route.ts`** — POST body now destructures an optional `memoryContext: string`. Server applies a defensive `slice(0, 4000)` cap (anything longer is noise or a malformed request — truncate, don't 400). Injected as a SEPARATE non-cached system message AFTER the cached personality prompt. For Claude this keeps the prompt-cache prefix stable (personality prompt is identical → cache hit) while letting the variable memory tail change per request. For Grok/DeepSeek it's just a plain system message in order. **Skipped entirely on vision pings** — those use a one-shot constrained prompt where memory context would be off-topic and cache would miss anyway. The scene-context system message still comes last (after both personality + memory).
+- **`ChatInterface.tsx`** — transport `body()` callback now includes `memoryContext: memoriesAsContext(5)` on every request. Called INSIDE the callback (not at component mount) so each new request sees the latest memories. Capped at 5 to keep the system prompt size reasonable; server applies its own 4000-char safety net. Also mounts `<MemoriesPanel>`, `<SearchPanel>`, `<SpeakingHint>` at the bottom of the JSX (SpeakingHint outside the chat container so its `fixed` positioning anchors to the viewport). **Mobile soft-keyboard fix**: a new `useEffect` subscribes to `window.visualViewport`'s `resize`/`scroll` events; when the keyboard opens, `visualViewport.height` shrinks but `window.innerHeight` doesn't — we compute the delta and push it as `padding-bottom` on the sticky input container so the text field rises above the keyboard. Guarded so older browsers (no `visualViewport` support) skip this entirely.
+- **`ChatMessage.tsx`** — long-press / right-click context menu now wired. Uses `useLongPress` to detect the gesture (500ms threshold, 10px movement budget so real scrolls cancel) and `ContextMenu` to render the dropdown anchored to the touch/click position (`x`, `y` from `clientX/Y`). Three items: Copy (via `navigator.clipboard.writeText`), Share (via `navigator.share` with clipboard fallback; quiet on user-cancellation `AbortError`), Save/Unsave (toggles a favorite — label flips based on current state). Header icons (Favorite, Share) stay; long-press is a power-user shortcut. Hook is called every render regardless of branch so React's rules-of-hooks contract holds, and the `bind` props are only spread onto the assistant bubble.
+- **`ActionButtons.tsx`** — added a third 2-col row beneath the existing 3-col Saved/Community/Settings row, with **Search** and **Memories** buttons. Mirrors the existing button styling for visual consistency. Layout rationale in the inline comment: at a 375px viewport, fitting 5 entries on a single row would crowd labels like "Memories" — two rows keeps labels comfortably readable and matches existing muscle memory.
+- **`types.ts`** — `ActivePanel` union extended with `'memories'` and `'search'` (now: `'none' | 'parables' | 'prayer' | 'teachings' | 'settings' | 'community' | 'favorites' | 'memories' | 'search'`).
+
+### Server-side memory is now LIVE
+The "wire `useConversationMemory` into transport body" item from Wave 8's pending list is **complete**. The pipeline now runs end-to-end:
+1. User clears history → `summarizeAndSave` POSTs to `/api/summarize` → Claude Haiku returns a one-sentence past-tense summary → persisted to localStorage.
+2. On every subsequent `/api/chat` request, `memoriesAsContext(5)` renders the most recent 5 memories as a system-prompt block and the transport ships it in the body.
+3. Server destructures `memoryContext`, slices to 4000 chars max, injects as a separate non-cached system message AFTER the cached personality prompt.
+4. Claude (or Grok/DeepSeek) sees the memory block alongside the personality prompt — produces responses that reference past conversations naturally.
+
+The prompt-cache breakpoint sits BEFORE the memory message, so the cache prefix (personality prompt) stays stable across requests — only the memory tail changes per call. This is the **split system message + cached prefix + fresh tail** pattern (see Key Design Decisions #25 below).
+
+### NOT yet wired (intentionally — note as pending)
+- `usePullToRefresh` + `PullToRefreshIndicator` — still shipped, still unused. Empty-state integration is a small follow-up.
+- Notifications opt-in — not built yet; on the roadmap.
+
+---
+
 ## Tech Stack
 
 - **Framework**: Next.js 16.2.3 (BREAKING CHANGES from older versions — always check `node_modules/next/dist/docs/` before writing code)
@@ -242,7 +277,7 @@ src/
 │   │   ├── tts/route.ts           # ElevenLabs TTS wrapper (voiceId allowlist)
 │   │   ├── version/route.ts       # Returns deployed build ID for stale-build self-heal
 │   │   └── vision/route.ts        # Gemini 2.5 Flash REST (key in header, no error leakage)
-│   ├── layout.tsx                 # Root layout — VersionCheck, AnalyticsInit, ServiceWorkerRegistration, ToastProvider, ErrorBoundary
+│   ├── layout.tsx                 # Root layout — VersionCheck, AnalyticsInit, ServiceWorkerRegistration, ToastProvider, ErrorBoundary + OG/Twitter metadata
 │   ├── page.tsx                   # Entry → ChatInterface
 │   └── globals.css                # Tailwind + custom animations
 ├── components/
@@ -262,18 +297,21 @@ src/
 │   ├── FavoritesPanel.tsx         # Slide-up sheet listing all favorites
 │   ├── GreetingHeader.tsx         # Time-aware greeting (local time → UTC SSR guarded)
 │   ├── HeroSection.tsx            # Jesus visual + voice visualizers
-│   ├── MoodSelector.tsx           # NEW: 2x5 / 5x2 grid of 10 mood chips
+│   ├── MemoriesPanel.tsx          # NEW (Wave 10): slide-up drawer for saved conversation memories
+│   ├── MoodSelector.tsx           # 2x5 / 5x2 grid of 10 mood chips
 │   ├── OnboardingOverlay.tsx      # 4-slide first-run tour
-│   ├── ParableReader.tsx          # NEW: full-screen immersive reading mode + TTS + drop-cap typography
+│   ├── ParableReader.tsx          # Full-screen immersive reading mode + TTS + drop-cap typography
 │   ├── ParablesDrawer.tsx         # Parable browser (tap opens ParableReader instead of inline expand)
 │   ├── PersonalitySwitcher.tsx    # Horizontal chip strip below hero (9 personalities)
 │   ├── PrayerRequestForm.tsx      # Prayer submission (localStorage)
-│   ├── PullToRefreshIndicator.tsx # NEW: visual companion to usePullToRefresh (unwired — for future use)
-│   ├── ServiceWorkerRegistration.tsx # NEW: production-only client component that registers /sw.js
+│   ├── PullToRefreshIndicator.tsx # Visual companion to usePullToRefresh (unwired — for future use)
+│   ├── SearchPanel.tsx            # NEW (Wave 10): slide-up drawer for searching chat + favorites + parables
+│   ├── ServiceWorkerRegistration.tsx # Production-only client component that registers /sw.js
 │   ├── SettingsPanel.tsx          # All settings (personality, autoSpeak, vision interval, voice, EXPORT, clear)
 │   ├── ShareButton.tsx            # Web Share API + clipboard fallback
 │   ├── Skeleton.tsx               # Shimmer placeholders (Skeleton + SkeletonMessage + SkeletonCard)
-│   ├── StreakBadge.tsx            # NEW: "🔥 N day streak" chip; auto-records activity on mount
+│   ├── SpeakingHint.tsx           # NEW (Wave 10): discreet "Tap to interrupt" pill while jAIsus speaks
+│   ├── StreakBadge.tsx            # "🔥 N day streak" chip; auto-records activity on mount
 │   ├── SuggestedPrompts.tsx       # Daily rotating horizontal chip strip
 │   ├── TeachingPlayer.tsx         # Teaching generator + player (topic chips + TTS)
 │   ├── Toast.tsx                  # ToastProvider — top-center stack, max 3 visible
@@ -306,12 +344,13 @@ src/
     ├── parables.ts                # 50 parables database
     ├── personalities.ts           # 9 personalities with prompts + provider
     ├── rate-limit.ts              # Token-bucket per-IP
-    ├── streaks.ts                 # NEW: consecutive-day streak (local-time calendar, DST-safe)
+    ├── search.ts                  # NEW (Wave 10): client-side search across chat + favorites + parables
+    ├── streaks.ts                 # Consecutive-day streak (local-time calendar, DST-safe)
     ├── suggested-prompts.ts       # 30 curated chips, daily round-robin
-    ├── sw-config.ts               # NEW: SW_VERSION + SW_PATH constants
+    ├── sw-config.ts               # SW_VERSION + SW_PATH constants
     ├── system-prompt.ts           # TEACHING_PROMPT only (SYSTEM_PROMPT removed)
     ├── toast.ts                   # Imperative toast API (CustomEvent dispatcher)
-    └── types.ts                   # ActivePanel, VoiceState, Parable, PrayerRequest
+    └── types.ts                   # ActivePanel (incl. memories/search), VoiceState, Parable, PrayerRequest
 
 public/
 ├── sw.js                          # NEW: service worker (network-first HTML, cache-first static, /api/* pass-through)
@@ -435,6 +474,29 @@ The SW deliberately PASSES THROUGH `/api/*` requests so `VersionCheck`'s `/api/v
 ### 24. Edge-Runtime OG Image Rendering (NEW)
 `/api/og` uses `export const runtime = 'edge'` and `next/og`'s `ImageResponse` (Satori-backed React-to-PNG). Edge is fast and globally distributed; PNGs are deterministic for the same input, so they're aggressively cached (`max-age=3600, s-maxage=86400, immutable`). Three variants (`default`, `verse`, `message`) share a common `cardFrame` builder. JSX is built via explicit `createElement` calls rather than .tsx syntax — the route file is `.ts` per the project spec, and the visual output is identical. Defensive throughout: malformed input is sanitized, unknown `type` falls back to default, and even a Satori render exception falls back to the default card rather than 500ing — crawlers send weird stuff and we never want a broken image to be the unfurl.
 
+### 25. Split System Messages: Cached Prefix + Fresh Tail (NEW)
+Anthropic's prompt cache rewards a **stable prefix** — the cache hit is determined by the LONGEST exact-prefix match across system + messages. To exploit this while still injecting per-request context, `/api/chat` splits its system message into ordered fragments:
+
+```
+[ system: personality prompt          ] ← marked cacheControl: ephemeral (Claude only)
+[ system: memoryContext (capped 4000c) ] ← uncached, varies per request
+[ system: scene context (camera only)  ] ← uncached, varies per request
+```
+
+The personality prompt is identical across requests for a given personality → Anthropic re-serves the cached tokens at ~10% the original cost for ~5 minutes. The variable tails come AFTER the breakpoint so they don't invalidate the cache. Vision pings bypass this entirely — they use a one-shot constrained prompt where the cache would never hit and memory would be off-topic.
+
+Generalizable rule: when you have stable + variable system content, put stable FIRST with a cache_control marker, then variable content after. Don't interleave — interleaving forces the cache to recompute from the diverged point. For non-Claude providers (Grok, DeepSeek) the same ordered list just becomes plain system messages — no harm, no benefit, but the architecture is uniform.
+
+### 26. Visual-Viewport Keyboard Fix (NEW)
+On iOS Safari, the soft keyboard shrinks `window.visualViewport.height` but leaves `window.innerHeight` unchanged. `position: sticky` elements anchored to the bottom of the viewport end up HIDDEN behind the keyboard. `ChatInterface` solves this by subscribing to `visualViewport.{resize,scroll}` events, computing `delta = window.innerHeight - visualViewport.height`, and adding that as `padding-bottom` on the sticky input container. Guarded against older browsers (no `visualViewport` support) — they skip the listener and get the original layout. The delta is also useful for any other bottom-anchored UI that needs to rise above the keyboard.
+
+### 27. Per-Session Show Cap Pattern (NEW)
+`SpeakingHint` is a "teach once, then stop nagging" UI. It tracks two pieces of state:
+1. `shownThisEventRef` — has the hint already shown on THIS rising-edge of `voiceState === 'speaking'`? Reset when speech ends.
+2. `sessionShowCountRef` — total appearances in this page-load session, capped at 3.
+
+Combined: the hint can show MULTIPLE times per session (so the user genuinely encounters it once they start chatting), but never twice in the same speech turn, and never more than 3 total per page-load. Generalizable to any "discoverability nudge" UI — the per-event ref enforces "one per occurrence" while the per-session counter caps the lifetime nag count. Also pairs well with an `autoHideMs` so the hint doesn't linger even if the trigger condition stays active.
+
 ---
 
 ## The 9 Personalities
@@ -537,21 +599,22 @@ The Mac user is `resorb` and the repo lives at:
 - ~~Conversation export (markdown / audio mix)~~ — markdown + JSON + plaintext shipped in Wave 7 (`ExportButton` in Settings).
 - ~~FavoritesPanel sharing-export — export all favorites as markdown~~ — covered by the conversation export above.
 - ~~PWA service worker for offline shell + push notification readiness~~ — service worker shipped (Wave 8); push notifications still TODO.
+- ~~Wire conversation memory server-side~~ — Wave 11 landed it. `memoriesAsContext(5)` ships in the transport body; `/api/chat` destructures `memoryContext`, caps at 4000 chars, injects as a separate non-cached system message after the cached personality prompt. Cache prefix preserved.
+- ~~Wire OG meta tags into `layout.tsx`~~ — Wave 12 landed `metadata.openGraph` + `metadata.twitter` pointing at `/api/og?type=default`. Crawlers can now find the preview card.
+- ~~Wire `useLongPress` + `ContextMenu` into `ChatMessage`~~ — Wave 11 landed it. Long-press / right-click on an assistant bubble opens a context menu with Copy / Share / Save-Unsave.
+- ~~Memory management UI~~ — Wave 10 landed `MemoriesPanel` (slide-up drawer with per-row remove + two-tap clear-all).
 
 ### High Priority
 - [ ] **Add `XAI_API_KEY` and `DEEPSEEK_API_KEY` to `.env.local`** for local testing
 - [ ] **Find a Trump-like voice** in ElevenLabs (current Bill voice is placeholder)
 - [ ] **Implement `/api/analytics`** to actually receive events. Right now the client sends to a 404 and drops the events.
 - [ ] **Add provider error fallback** — if DeepSeek/Grok fails, fall back to Claude gracefully
-- [ ] **Wire conversation memory server-side** — `useConversationMemory.summarizeAndSave` already persists summaries on `handleClearHistory`; next step is to send the last N memories in the transport body and have `/api/chat` inject them into the personality system message. `memoriesAsContext(limit)` is ready to slot in.
-- [ ] **Wire OG meta tags into `layout.tsx`** — `/api/og` works but nothing links to it yet. Add `metadata.openGraph` and `metadata.twitter` pointing at `/api/og?type=default` (and add a verse variant on the daily verse share button).
+- [ ] **Verse-variant OG image on the daily verse share button** — `/api/og?type=verse&text=&ref=` already supports it; just need ShareButton to use the verse-typed URL on verse shares.
 
 ### Medium Priority
 - [ ] **Wire `usePullToRefresh` + `PullToRefreshIndicator`** into the empty state — pulls down to refresh the daily verse + kindness + suggested prompts.
-- [ ] **Wire `useLongPress` + `ContextMenu`** into `ChatMessage` — long-press / right-click to expose Copy / Save / Share / Quote.
-- [ ] **Memory management UI** — surface saved memories in a Settings sub-panel so users can review / delete / clear-all (`removeMemory(id)`, `clearMemories()` already exposed via the hook).
-- [ ] **Voice interruption** — let the user cut off jAIsus mid-sentence by holding the mic.
-- [ ] **Push notifications** for daily verse / kindness / streak reminders (opt-in). Service worker registration is already in place; needs the push subscription flow + a server endpoint.
+- [ ] **Notifications opt-in** — push subscription flow + a server endpoint for daily verse / kindness / streak reminders. Service worker registration is in place; needs the consent UX and the `PushSubscription` plumbing.
+- [ ] **Voice interruption** — let the user cut off jAIsus mid-sentence by holding the mic. `SpeakingHint` already exposes a tap-to-interrupt path; mic-hold is the natural follow-up.
 - [ ] **Rate limit on `/api/vision`** — capture is client-throttled but server should still cap per-IP.
 - [ ] **Distributed rate limiter** (`@upstash/ratelimit`) when traffic outgrows the in-memory bucket.
 - [ ] **Better error display** when provider API keys are missing — surface a real toast instead of silent failure.
@@ -633,7 +696,7 @@ The Mac user is `resorb` and the repo lives at:
 4. `/api/summarize` rate-limits per IP (burst 20, 1/15s), truncates input from the front to 8000 chars, calls Claude Haiku with a 60-token cap and a tight system prompt
 5. Response `{summary}` → `addMemory({summary, personalityId, messageCount})` → localStorage write → `jaisus-memories-changed` event
 6. Any mounted `useConversationMemory` consumer (none yet, but the hook subscribes) re-reads via the event listener
-7. **NOT YET WIRED**: the transport body for `/api/chat` should include `memoriesAsContext()` and the route should inject it into the personality system prompt for cross-session continuity. Saved memories are currently inert.
+7. **LIVE (Wave 11)**: the transport body for `/api/chat` includes `memoryContext: memoriesAsContext(5)` on every request. The server destructures it, caps at 4000 chars, and injects as a separate non-cached system message AFTER the cached personality prompt. Vision pings skip this entirely (one-shot prompt). Cross-session continuity is real now — jAIsus actually references past conversations.
 
 ### Service Worker Flow (NEW)
 1. `layout.tsx` mounts `<ServiceWorkerRegistration />` in production only
@@ -652,7 +715,7 @@ The Mac user is `resorb` and the repo lives at:
 3. Variant-specific `cardFrame(body)` builds a `ReactElement` tree via `React.createElement`
 4. `next/og`'s `ImageResponse` rasterizes Satori → 1200x630 PNG
 5. Response served with `Cache-Control: public, max-age=3600, s-maxage=86400, immutable`
-6. **NOT YET WIRED**: no `og:image` meta tag in `layout.tsx` points at this route yet — crawlers can't find it.
+6. **LIVE (Wave 12)**: `layout.tsx` `metadata.openGraph.images` + `metadata.twitter.images` point at `/api/og?type=default`. Crawlers parsing the initial HTML find the preview card and unfurl it on social platforms.
 
 ---
 
@@ -701,7 +764,13 @@ In local dev, `BUILD_ID` is `'dev'` and `VersionCheck` short-circuits — no rel
 ## Recent Commit History (newest first)
 
 ```
-<pending tier-5 commit>  feat: streaks, moods, conversation memory, parable reader, exports, SW, OG images
+<pending tier-6 commit>  feat: tier-6 — memories panel, search panel, speaking hint, server-side memory, OG meta wired
+9be302e feat: tier-5 wire-up + HANDOVER refresh
+8f90533 feat: tier-5 wave 8 — PWA service worker, OG images, reading mode, export
+259c442 feat: tier-5 wave 7 — conversation memory, streaks, mood, pull-to-refresh, long-press
+5d9af2e feat: wire Wave 4 panels into main UI + refresh handover docs
+937c1f0 feat: polish wire-up — toasts, skeletons, empty states, analytics events
+ab9ca02 feat: panels and feature components — favorites, share, personality switcher, greeting, daily kindness
 53ec164 feat: wire new UX into the app
 3231c99 feat: UX building blocks — error boundary, toasts, haptics, onboarding, favorites, daily verse, suggested prompts, analytics
 47e568f feat: massive content expansion — parables, personalities, teaching topics

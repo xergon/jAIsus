@@ -16,4 +16,4 @@ export interface PrayerRequest {
   timestamp: number;
 }
 
-export type ActivePanel = 'none' | 'parables' | 'prayer' | 'teachings' | 'settings' | 'community' | 'favorites';
+export type ActivePanel = 'none' | 'parables' | 'prayer' | 'teachings' | 'settings' | 'community' | 'favorites' | 'memories' | 'search';

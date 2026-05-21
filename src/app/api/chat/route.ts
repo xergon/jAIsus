@@ -19,11 +19,20 @@ export async function POST(req: Request) {
   const rl = rateLimit(`chat:${clientKey(req)}`, CHAT_LIMIT);
   if (!rl.ok) return rateLimitResponse(rl);
 
-  const { messages, sceneDescription, personalityId }: {
+  const { messages, sceneDescription, personalityId, memoryContext }: {
     messages: UIMessage[];
     sceneDescription?: string;
     personalityId?: string;
+    memoryContext?: string;
   } = await req.json();
+
+  // Defensive cap — never trust client-side length. 4000 chars is plenty for
+  // ~5 short summaries with formatting; anything longer is either noise or
+  // a malformed request. Truncate (don't 400) so the rest of the request
+  // still works.
+  const safeMemoryContext = memoryContext
+    ? memoryContext.slice(0, 4000)
+    : '';
 
   const personality = getPersonality(personalityId || DEFAULT_PERSONALITY_ID);
   // Detect if this is an auto-vision ping (parenthetical message)
@@ -73,6 +82,17 @@ DO NOT monologue. DO NOT philosophize. DO NOT be sentimental. ONE sentence, make
         },
       }),
     });
+    // Memory context — recent conversation summaries injected after the cached
+    // personality prompt so the cache prefix stays stable. NOT cached itself,
+    // since the memory set changes per request. For Claude this means the
+    // breakpoint above remains valid; for non-Claude providers it's just a
+    // plain system message appended in order.
+    if (safeMemoryContext && safeMemoryContext.trim().length > 0) {
+      systemMessages.push({
+        role: 'system',
+        content: safeMemoryContext,
+      });
+    }
     // Scene context — separate, uncached (varies per camera capture)
     if (hasVision) {
       systemMessages.push({

@@ -31,6 +31,24 @@ export const metadata: Metadata = {
   title: "jAIsus — AI Spiritual Companion",
   description: "A compassionate AI guide grounded in biblical teachings, parables, and spiritual wisdom.",
   manifest: "/manifest.json",
+  // Social-media unfurls. /api/og is an edge-runtime dynamic OG image (1200x630
+  // PNG via next/og, aggressively cached). Crawlers don't execute JS — they
+  // need these meta tags in the initial HTML to discover the preview card.
+  openGraph: {
+    title: 'jAIsus — AI Spiritual Companion',
+    description: 'A compassionate AI guide grounded in biblical teachings.',
+    type: 'website',
+    images: [
+      { url: '/api/og?type=default', width: 1200, height: 630, alt: 'jAIsus' },
+    ],
+    siteName: 'jAIsus',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'jAIsus — AI Spiritual Companion',
+    description: 'A compassionate AI guide grounded in biblical teachings.',
+    images: ['/api/og?type=default'],
+  },
 };
 
 export const viewport: Viewport = {
