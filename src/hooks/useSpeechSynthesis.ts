@@ -85,14 +85,17 @@ function unlockAudio() {
   }
 }
 
-// Set up unlock listeners once
+// Set up unlock listeners once.
+//
+// Using { once: true } means each listener auto-removes after firing — no
+// need to call removeEventListener manually. Combined with the
+// `audioUnlocked` guard inside unlockAudio(), this is safe even if multiple
+// events fire (e.g., a click triggers both touchstart and click). Previously
+// these used { once: false } with manual removal, which leaked listeners on
+// HMR reloads and on unmounts before audio was unlocked.
 if (typeof window !== 'undefined') {
-  const events = ['touchstart', 'touchend', 'click', 'keydown'];
-  function onFirstInteraction() {
-    unlockAudio();
-    events.forEach(e => document.removeEventListener(e, onFirstInteraction, true));
-  }
-  events.forEach(e => document.addEventListener(e, onFirstInteraction, { capture: true, once: false, passive: true }));
+  const unlockEvents = ['touchstart', 'touchend', 'click', 'keydown'];
+  unlockEvents.forEach(e => document.addEventListener(e, unlockAudio, { capture: true, once: true, passive: true }));
 }
 
 export function useSpeechSynthesis(): SpeechSynthesisResult {
@@ -102,16 +105,35 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
   const queueRef = useRef<string[]>([]);
   const queueActiveRef = useRef(false);
   const streamDoneRef = useRef(false);
+  // Track every blob URL we create so we can revoke them all on stop/unmount.
+  // Without this, stop() leaves blob URLs orphaned in memory until the next
+  // play cycle's onended/onerror fires (which it won't, because handlers are
+  // detached on the previous element).
+  const activeBlobUrlsRef = useRef<Set<string>>(new Set());
+
+  // Helper: track a blob URL for cleanup
+  const trackBlobUrl = useCallback((url: string) => {
+    activeBlobUrlsRef.current.add(url);
+  }, []);
+  const releaseBlobUrl = useCallback((url: string) => {
+    if (activeBlobUrlsRef.current.delete(url)) {
+      URL.revokeObjectURL(url);
+    }
+  }, []);
 
   // Pre-load browser voices (needed on some browsers)
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    window.speechSynthesis.getVoices();
+    // Chrome loads voices async — keep a stable handler reference so cleanup
+    // doesn't accidentally null someone else's handler
+    const onVoicesChanged = () => {
       window.speechSynthesis.getVoices();
-      // Chrome loads voices async
-      window.speechSynthesis.onvoiceschanged = () => {
-        window.speechSynthesis.getVoices();
-      };
-    }
+    };
+    window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged);
+    return () => {
+      window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
+    };
   }, []);
 
   const stop = useCallback(() => {
@@ -126,12 +148,23 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       // Do NOT clear src — preserves warm audio's autoplay privilege
       audioRef.current = null;
     }
+    // Revoke ALL outstanding blob URLs to prevent leaks
+    activeBlobUrlsRef.current.forEach(url => {
+      try { URL.revokeObjectURL(url); } catch { /* */ }
+    });
+    activeBlobUrlsRef.current.clear();
     // Also stop browser TTS
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
     setIsSpeaking(false);
   }, []);
+
+  // Stop everything on unmount — prevents fetches, audio playback, and
+  // setIsSpeaking calls from continuing after the component is gone.
+  useEffect(() => {
+    return () => { stop(); };
+  }, [stop]);
 
   const speak = useCallback(async (text: string) => {
     stop();
@@ -166,6 +199,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       }
 
       const blobUrl = URL.createObjectURL(blob);
+      trackBlobUrl(blobUrl);
 
       // Use the warm (gesture-unlocked) audio element. It was play()-ed during
       // a user gesture so Chrome trusts it for autoplay. getWarmAudio() always
@@ -176,14 +210,14 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       audioRef.current = audio;
 
       audio.onended = () => {
-        URL.revokeObjectURL(blobUrl);
+        releaseBlobUrl(blobUrl);
         setIsSpeaking(false);
         audioRef.current = null;
       };
 
       audio.onerror = (e) => {
         console.warn('Audio playback error:', e);
-        URL.revokeObjectURL(blobUrl);
+        releaseBlobUrl(blobUrl);
         setIsSpeaking(false);
         audioRef.current = null;
         speakWithBrowser(text, () => setIsSpeaking(false));
@@ -209,12 +243,12 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
         fallback.volume = 1.0;
         audioRef.current = fallback;
         fallback.onended = () => {
-          URL.revokeObjectURL(blobUrl);
+          releaseBlobUrl(blobUrl);
           setIsSpeaking(false);
           audioRef.current = null;
         };
         fallback.onerror = () => {
-          URL.revokeObjectURL(blobUrl);
+          releaseBlobUrl(blobUrl);
           setIsSpeaking(false);
           audioRef.current = null;
           speakWithBrowser(text, () => setIsSpeaking(false));
@@ -223,7 +257,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
           await fallback.play();
         } catch {
           console.warn('All audio play attempts failed, falling back to browser TTS');
-          URL.revokeObjectURL(blobUrl);
+          releaseBlobUrl(blobUrl);
           speakWithBrowser(text, () => setIsSpeaking(false));
         }
       }
@@ -232,7 +266,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       console.warn('TTS error, falling back to browser:', err);
       speakWithBrowser(text, () => setIsSpeaking(false));
     }
-  }, [stop]);
+  }, [stop, trackBlobUrl, releaseBlobUrl]);
 
   // --- Sentence queue for streaming TTS ---
   // Plays sentences one by one as they arrive from the AI stream.
@@ -254,6 +288,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       if (blob.size < 100) return false;
 
       const blobUrl = URL.createObjectURL(blob);
+      trackBlobUrl(blobUrl);
       return new Promise<boolean>((resolve) => {
         let resolved = false;
         const done = (ok: boolean) => {
@@ -261,7 +296,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
           resolved = true;
           clearTimeout(safetyTimeout);
           // Delay blob revocation so stale events don't fire errors on the audio element
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 500);
+          setTimeout(() => releaseBlobUrl(blobUrl), 500);
           audioRef.current = null;
           resolve(ok);
         };
@@ -303,7 +338,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       if ((err as Error).name === 'AbortError') return false;
       return false;
     }
-  }, []);
+  }, [trackBlobUrl, releaseBlobUrl]);
 
   const processQueue = useCallback(async () => {
     if (queueActiveRef.current) {

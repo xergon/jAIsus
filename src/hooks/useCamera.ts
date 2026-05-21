@@ -46,8 +46,15 @@ export function useCamera(): UseCameraResult {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const firstFrameTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const activeRef = useRef(false);
+  // Generation counter — incremented on every stopCamera / unmount.
+  // startCamera captures the current generation before awaiting getUserMedia;
+  // if the generation has changed by the time the promise resolves, the user
+  // has already turned the camera off and we must NOT install the stream
+  // (otherwise rapid toggling leaks orphaned MediaStream tracks).
+  const generationRef = useRef(0);
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -73,6 +80,9 @@ export function useCamera(): UseCameraResult {
 
   const analyzeFrame = useCallback(async () => {
     if (!activeRef.current) return;
+    // Skip vision when tab is hidden — user can't see results anyway,
+    // and Gemini quota is precious
+    if (typeof document !== 'undefined' && document.hidden) return;
 
     const frame = captureFrame();
     if (!frame) {
@@ -116,12 +126,24 @@ export function useCamera(): UseCameraResult {
       return;
     }
 
+    // Capture generation before awaiting — if stopCamera/unmount bumps the
+    // generation before getUserMedia resolves, we must NOT install the stream.
+    const gen = generationRef.current;
+
     try {
       setError(null);
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
         audio: false,
       });
+
+      // Stale resolution — user canceled or component unmounted while the
+      // permission prompt was open. Stop the tracks immediately to release
+      // the hardware indicator and prevent the orphan-stream leak.
+      if (gen !== generationRef.current) {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
 
       streamRef.current = stream;
       activeRef.current = true;
@@ -134,9 +156,11 @@ export function useCamera(): UseCameraResult {
       setIsActive(true);
 
       // First frame after camera warms up, then every 10s
-      setTimeout(() => analyzeFrame(), 1500);
+      firstFrameTimeoutRef.current = setTimeout(() => analyzeFrame(), 1500);
       intervalRef.current = setInterval(() => analyzeFrame(), CAPTURE_INTERVAL);
     } catch (err) {
+      // If stale, swallow silently — user already turned camera off
+      if (gen !== generationRef.current) return;
       console.warn('Camera error:', err);
       if ((err as Error).name === 'NotAllowedError') {
         setError('Camera access denied. Please allow camera access.');
@@ -147,11 +171,18 @@ export function useCamera(): UseCameraResult {
   }, [isSupported, analyzeFrame]);
 
   const stopCamera = useCallback(() => {
+    // Bump generation FIRST so any in-flight getUserMedia bails out
+    generationRef.current++;
     activeRef.current = false;
 
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
+    }
+
+    if (firstFrameTimeoutRef.current) {
+      clearTimeout(firstFrameTimeoutRef.current);
+      firstFrameTimeoutRef.current = null;
     }
 
     if (streamRef.current) {
@@ -178,8 +209,11 @@ export function useCamera(): UseCameraResult {
 
   useEffect(() => {
     return () => {
+      // Bump generation so any pending getUserMedia bails out
+      generationRef.current++;
       activeRef.current = false;
       if (intervalRef.current) clearInterval(intervalRef.current);
+      if (firstFrameTimeoutRef.current) clearTimeout(firstFrameTimeoutRef.current);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }

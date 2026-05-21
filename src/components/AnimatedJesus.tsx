@@ -54,11 +54,33 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
     currentEmotionRef.current = emotion;
   }, [emotion]);
 
-  // Detect available videos on mount
+  // Detect available videos on mount.
+  //
+  // CRITICAL: each probe video element holds a real decoder slot. iOS Safari
+  // caps active decoders at ~16, often allows only 1 at a time. Previously
+  // the 7 probes were never released and could block real playback. Now we:
+  //  1. Release each probe's src as soon as metadata fires (or errors).
+  //  2. Track all probes so cleanup can release any still hanging.
+  //  3. Guard `done()`, the image probes, and the safety timeout against
+  //     calling setState on an unmounted component.
   useEffect(() => {
     mountedRef.current = true;
     const found: string[] = [];
     let checked = 0;
+    const probes: HTMLVideoElement[] = [];
+    const imageProbes: HTMLImageElement[] = [];
+    let detectTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    function releaseProbe(v: HTMLVideoElement) {
+      try {
+        v.onloadedmetadata = null;
+        v.onerror = null;
+        v.removeAttribute('src');
+        v.load();
+      } catch {
+        // Best-effort — element may already be GC'd
+      }
+    }
 
     function done() {
       if (!mountedRef.current) return;
@@ -70,11 +92,22 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
         const tryImages = ['/jesus-portrait.jpg', '/jesus-portrait.png'];
         let tried = 0;
         function tryNextImage() {
+          if (!mountedRef.current) return;
           if (tried >= tryImages.length) { setMode('canvas'); setImageLoaded(true); return; }
           const img = new Image();
+          imageProbes.push(img);
           img.src = tryImages[tried];
-          img.onload = () => { imageRef.current = img; setMode('image'); setImageLoaded(true); };
-          img.onerror = () => { tried++; tryNextImage(); };
+          img.onload = () => {
+            if (!mountedRef.current) return;
+            imageRef.current = img;
+            setMode('image');
+            setImageLoaded(true);
+          };
+          img.onerror = () => {
+            if (!mountedRef.current) return;
+            tried++;
+            tryNextImage();
+          };
         }
         tryNextImage();
       }
@@ -82,15 +115,41 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
 
     VIDEO_PLAYLIST.forEach(src => {
       const v = document.createElement('video');
+      probes.push(v);
       v.preload = 'metadata';
+      v.muted = true; // Safari sometimes refuses metadata load on unmuted off-document elements
       v.src = src;
-      v.onloadedmetadata = () => { found.push(src); checked++; if (checked === VIDEO_PLAYLIST.length) done(); };
-      v.onerror = () => { checked++; if (checked === VIDEO_PLAYLIST.length) done(); };
+      v.onloadedmetadata = () => {
+        found.push(src);
+        checked++;
+        releaseProbe(v);
+        if (checked === VIDEO_PLAYLIST.length) done();
+      };
+      v.onerror = () => {
+        checked++;
+        releaseProbe(v);
+        if (checked === VIDEO_PLAYLIST.length) done();
+      };
     });
 
-    setTimeout(() => { if (checked < VIDEO_PLAYLIST.length) { checked = VIDEO_PLAYLIST.length; done(); } }, 4000);
+    detectTimeout = setTimeout(() => {
+      if (checked < VIDEO_PLAYLIST.length) {
+        checked = VIDEO_PLAYLIST.length;
+        done();
+      }
+    }, 4000);
 
-    return () => { mountedRef.current = false; };
+    return () => {
+      mountedRef.current = false;
+      if (detectTimeout) clearTimeout(detectTimeout);
+      // Release any probes that haven't fired metadata yet
+      probes.forEach(releaseProbe);
+      // Detach image probe handlers
+      imageProbes.forEach(img => {
+        img.onload = null;
+        img.onerror = null;
+      });
+    };
   }, []);
 
   // Video playback engine

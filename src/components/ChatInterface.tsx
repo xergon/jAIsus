@@ -149,7 +149,15 @@ export function ChatInterface() {
   }, [cameraActive, autoSpeak, visionInterval]);
 
   // Load history + settings on mount
+  // Load history + settings exactly ONCE on mount.
+  // Previously this depended on [loadMessages, setMessages] — both of which can
+  // change identity across renders (especially setMessages from useChat after
+  // streaming starts). Re-running would overwrite in-flight messages with the
+  // stale snapshot from localStorage. The didLoadRef guard makes this idempotent.
+  const didLoadRef = useRef(false);
   useEffect(() => {
+    if (didLoadRef.current) return;
+    didLoadRef.current = true;
     const saved = loadMessages();
     if (saved.length > 0) {
       setMessages(saved);
@@ -162,14 +170,28 @@ export function ChatInterface() {
     const p = getPersonality(storedPid);
     setStoredVoiceId(p.voiceId);
     setMounted(true);
-  }, [loadMessages, setMessages]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Save messages when they change
+  // Save messages with debouncing.
+  // Previously fired on every render with a `messages` change — including each
+  // streaming token, which meant a localStorage write per chunk (main-thread
+  // jank on mobile and unnecessary I/O). Now coalesces rapid changes into a
+  // single write every 500ms, with a final flush when status returns to ready.
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (mounted && messages.length > 0) {
+    if (!mounted || messages.length === 0) return;
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    // Flush immediately when status is ready (end of turn); otherwise debounce.
+    const delay = status === 'ready' ? 0 : 500;
+    saveTimeoutRef.current = setTimeout(() => {
       saveMessages(messages);
-    }
-  }, [messages, saveMessages, mounted]);
+      saveTimeoutRef.current = null;
+    }, delay);
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [messages, saveMessages, mounted, status]);
 
   // Streaming TTS: feed sentences to the queue as they arrive during streaming
   useEffect(() => {
