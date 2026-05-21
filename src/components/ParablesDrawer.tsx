@@ -68,7 +68,7 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
           />
         </div>
 
-        <div className="overflow-y-auto px-4 pb-6 max-h-[60vh]">
+        <div className="overflow-y-auto px-4 pb-6 max-h-[60vh] modal-scroll">
           {filtered.length === 0 && search !== '' && (
             <EmptyState
               icon="🔍"

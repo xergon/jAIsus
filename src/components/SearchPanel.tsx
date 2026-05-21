@@ -251,7 +251,7 @@ export function SearchPanel({
 
         {/* Results / tips / empty state */}
         <div
-          className="overflow-y-auto px-4 pb-6 max-h-[65vh]"
+          className="overflow-y-auto px-4 pb-6 max-h-[65vh] modal-scroll"
           role="region"
           aria-live="polite"
           aria-busy={isDebouncing}

@@ -192,7 +192,7 @@ export function FavoritesPanel({
           )}
         </div>
 
-        <div className="overflow-y-auto px-4 pb-6 max-h-[65vh]">
+        <div className="overflow-y-auto px-4 pb-6 max-h-[65vh] modal-scroll">
           {favorites.length === 0 ? (
             <EmptyState
               icon="🤍"

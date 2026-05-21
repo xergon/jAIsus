@@ -256,6 +256,25 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Modal/drawer scroll containers — fix iOS touch-scroll regression.
+ *
+ * Background: useModalA11y uses position:fixed body lock so the page behind
+ * the modal doesn't scroll. Combined with the `overscroll-behavior: none`
+ * above on html/body, iOS Safari can stop propagating touch-scroll into the
+ * modal's overflow-y-auto child container.
+ *
+ * Fix: apply this class to every modal scroll container. It:
+ *   1. Tells iOS the scroll axis explicitly (touch-action: pan-y).
+ *   2. Re-enables momentum scrolling (legacy iOS).
+ *   3. Contains overscroll so scroll events stay inside the modal,
+ *      counter-acting the body-level "none" rule.
+ */
+.modal-scroll {
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
 /* Chat bubble animations */
 @keyframes messageFade {
   from {

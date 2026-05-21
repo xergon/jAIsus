@@ -99,7 +99,7 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
         </div>
 
         {/* Teaching content */}
-        <div className="flex-1 overflow-y-auto px-5 pb-5">
+        <div className="flex-1 overflow-y-auto px-5 pb-5 modal-scroll">
           {loading && (
             <div className="py-2 animate-fade-in" aria-live="polite" aria-busy="true">
               <span className="sr-only">Preparing teaching...</span>

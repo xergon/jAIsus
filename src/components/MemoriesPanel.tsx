@@ -158,7 +158,7 @@ export function MemoriesPanel({ isOpen, onClose }: MemoriesPanelProps) {
           to keep continuity. Stored only on this device.
         </p>
 
-        <div className="overflow-y-auto px-4 pb-6 max-h-[65vh]">
+        <div className="overflow-y-auto px-4 pb-6 max-h-[65vh] modal-scroll">
           {memories.length === 0 ? (
             <EmptyState
               icon="✨"
