@@ -13,9 +13,14 @@ const TEACHING_LIMIT = { capacity: 5, refillRatePerSec: 1 / 60 };
 // Hardcoded topic allowlist mirrors TEACHING_TOPICS in src/lib/constants.ts.
 // Kept here (not imported) so this route stays decoupled from client constants
 // and to prevent any future drift from accidentally allowing arbitrary topics.
+// IMPORTANT: keep this in sync with TEACHING_TOPICS — if you add a topic there,
+// add it here too. The client never sends a topic outside this list under
+// normal flow, but the server is the source of truth and trusts no client.
 const ALLOWED_TOPICS = new Set([
   'love', 'forgiveness', 'faith', 'hope',
   'patience', 'gratitude', 'compassion', 'wisdom',
+  'peace', 'courage', 'joy', 'grief',
+  'identity', 'calling', 'surrender', 'friendship',
 ]);
 
 export async function POST(req: Request) {

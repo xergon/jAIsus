@@ -1,3 +1,4 @@
+// Keep this in sync with ALLOWED_TOPICS in /api/teachings/route.ts
 export const TEACHING_TOPICS = [
   { id: 'love', label: 'Love', icon: '❤️' },
   { id: 'forgiveness', label: 'Forgiveness', icon: '🕊️' },
@@ -7,6 +8,14 @@ export const TEACHING_TOPICS = [
   { id: 'gratitude', label: 'Gratitude', icon: '🙏' },
   { id: 'compassion', label: 'Compassion', icon: '💛' },
   { id: 'wisdom', label: 'Wisdom', icon: '📖' },
+  { id: 'peace', label: 'Peace', icon: '☮️' },
+  { id: 'courage', label: 'Courage', icon: '🦁' },
+  { id: 'joy', label: 'Joy', icon: '✨' },
+  { id: 'grief', label: 'Grief', icon: '🕯️' },
+  { id: 'identity', label: 'Identity', icon: '🪞' },
+  { id: 'calling', label: 'Calling', icon: '🧭' },
+  { id: 'surrender', label: 'Surrender', icon: '🤲' },
+  { id: 'friendship', label: 'Friendship', icon: '🤝' },
 ] as const;
 
 // ElevenLabs voice options for settings dropdown
