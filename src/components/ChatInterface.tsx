@@ -41,6 +41,7 @@ import { PersonalityCreator } from './PersonalityCreator';
 import { useVoiceActivityDetection } from '@/hooks/useVoiceActivityDetection';
 import { VADConsentPrompt, getVADConsent, setVADConsent, type VADConsent } from './VADConsentPrompt';
 import { NotificationOptInPrompt, hasSeenNotificationPrompt } from './NotificationOptInPrompt';
+import { VoiceMemoModal } from './VoiceMemoModal';
 
 export function ChatInterface() {
   const [input, setInput] = useState('');
@@ -921,6 +922,18 @@ export function ChatInterface() {
         isOpen={activePanel === 'search'}
         onClose={() => setActivePanel('none')}
         onAskAbout={(text) => sendMessage({ text })}
+      />
+
+      {/* Voice memo / journal mode. Records up to 5 min, sends to /api/memo
+          (Gemini STT → Claude reflection), shows summary + themes + response,
+          plays back via the parent's TTS so the same voice the user just
+          picked in the personality switcher is the one reflecting back. */}
+      <VoiceMemoModal
+        isOpen={activePanel === 'voice-memo'}
+        onClose={() => setActivePanel('none')}
+        onSpeak={speak}
+        onStopSpeaking={stopSpeaking}
+        isSpeaking={isSpeaking}
       />
 
       {/* User-authored personality designer. On save, auto-switches to the
