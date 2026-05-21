@@ -16,11 +16,4 @@ export interface PrayerRequest {
   timestamp: number;
 }
 
-export interface Teaching {
-  id: string;
-  topic: string;
-  content: string;
-  timestamp: number;
-}
-
 export type ActivePanel = 'none' | 'parables' | 'prayer' | 'teachings' | 'settings' | 'community';

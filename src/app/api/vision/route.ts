@@ -26,12 +26,18 @@ export async function POST(req: Request) {
     // Strip data URL prefix if present (e.g., "data:image/jpeg;base64,...")
     const base64Data = image.includes(',') ? image.split(',')[1] : image;
 
-    // Use Gemini REST API directly (avoids SDK base64 encoding issues)
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+    // Use Gemini REST API directly (avoids SDK base64 encoding issues).
+    // Model: gemini-2.5-flash (current stable; previous 'gemini-3-flash-preview' didn't exist).
+    // API key goes in x-goog-api-key header — NOT the URL query string — so it doesn't
+    // leak into Google access logs, intermediate proxies, or our error traces.
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
       body: JSON.stringify({
         contents: [{
           parts: [
@@ -45,7 +51,8 @@ export async function POST(req: Request) {
     if (!response.ok) {
       const errorBody = await response.text();
       console.error('Gemini API error:', response.status, errorBody);
-      return Response.json({ error: 'Vision analysis failed', details: errorBody }, { status: 500 });
+      // Don't leak upstream error body to client — could expose key fragments, quota details, etc.
+      return Response.json({ error: 'Vision analysis failed' }, { status: 500 });
     }
 
     const data = await response.json();
@@ -54,6 +61,7 @@ export async function POST(req: Request) {
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error('Vision API error:', errMsg, err);
-    return Response.json({ error: 'Vision analysis failed', details: errMsg }, { status: 500 });
+    // Don't leak error details to client
+    return Response.json({ error: 'Vision analysis failed' }, { status: 500 });
   }
 }

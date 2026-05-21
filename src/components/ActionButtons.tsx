@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import type { ActivePanel } from '@/lib/types';
 
 interface ActionButtonsProps {
@@ -9,40 +8,20 @@ interface ActionButtonsProps {
 }
 
 export function ActionButtons({ onAskQuestion, onOpenPanel }: ActionButtonsProps) {
-  const [activeTab, setActiveTab] = useState<'teachings' | 'listen'>('teachings');
-
   return (
     <div className="px-4 py-3 space-y-2.5">
-      {/* Dynamic Teachings / Listen tab bar */}
-      <div className="flex items-center bg-stone-100 rounded-xl p-1">
-        <button
-          onClick={() => {
-            setActiveTab('teachings');
-            onOpenPanel('teachings');
-          }}
-          className={`flex-1 flex items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium transition-colors ${
-            activeTab === 'teachings'
-              ? 'bg-white text-teal-700 shadow-sm'
-              : 'text-stone-500'
-          }`}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-            <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-          </svg>
-          Dynamic Teachings
-        </button>
-        <button
-          onClick={() => setActiveTab('listen')}
-          className={`flex-1 flex items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium transition-colors ${
-            activeTab === 'listen'
-              ? 'bg-white text-teal-700 shadow-sm'
-              : 'text-stone-500'
-          }`}
-        >
-          Listen/app
-        </button>
-      </div>
+      {/* Dynamic Teachings — full-width tile (the previous "Listen/app" tab
+          was a dead button with no panel wired up, so the tab bar is gone). */}
+      <button
+        onClick={() => onOpenPanel('teachings')}
+        className="w-full flex items-center justify-center gap-2 rounded-xl bg-stone-100 px-4 py-2.5 text-sm font-medium text-teal-700 active:scale-[0.98] transition-transform"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+          <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+        </svg>
+        Dynamic Teachings
+      </button>
 
       {/* Ask a Question — full width primary CTA */}
       <button

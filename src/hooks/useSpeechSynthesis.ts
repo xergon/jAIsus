@@ -167,10 +167,10 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
 
       const blobUrl = URL.createObjectURL(blob);
 
-      // Use the warm (gesture-unlocked) audio element if available,
-      // otherwise fall back to a new Audio(). The warm element was
-      // play()-ed during a user gesture so Chrome trusts it.
-      const audio = getWarmAudio() || new Audio();
+      // Use the warm (gesture-unlocked) audio element. It was play()-ed during
+      // a user gesture so Chrome trusts it for autoplay. getWarmAudio() always
+      // returns an element (creates one lazily), so no || fallback needed.
+      const audio = getWarmAudio();
       audio.src = blobUrl;
       audio.volume = 1.0;
       audioRef.current = audio;

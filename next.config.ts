@@ -1,28 +1,18 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Aggressive no-cache for HTML — prevents mobile Safari and iOS PWAs from
-  // serving stale builds. Static assets (_next/static) are content-hashed by
-  // Next.js so they keep their own immutable caching (this only affects HTML).
+  // No-cache for HTML — prevents mobile Safari and iOS PWAs from serving stale
+  // builds. Static assets (_next/static) are content-hashed by Next.js so they
+  // keep their own immutable caching (this only affects HTML).
   //
-  // Headers explained:
-  // - no-store: NEVER cache, anywhere (browser, CDN, proxy)
-  // - no-cache: must revalidate before use (defense in depth with no-store)
-  // - must-revalidate: stale responses must NOT be served
-  // - proxy-revalidate: same as must-revalidate but for shared caches (CDN)
-  // - max-age=0: response is immediately stale
-  // - s-maxage=0: defeats Vercel's edge CDN cache (overrides max-age for shared caches)
+  // `no-store` is the strongest directive and implies the others (no-cache,
+  // must-revalidate, max-age=0). It also applies to shared caches like Vercel's
+  // edge CDN, so s-maxage isn't needed either.
   headers: async () => [
     {
       source: '/',
       headers: [
-        {
-          key: 'Cache-Control',
-          value: 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0',
-        },
-        // HTTP/1.0 fallback — some older Safari versions still respect this
-        { key: 'Pragma', value: 'no-cache' },
-        { key: 'Expires', value: '0' },
+        { key: 'Cache-Control', value: 'no-store' },
       ],
     },
   ],

@@ -5,7 +5,13 @@ import { VersionCheck } from "@/components/VersionCheck";
 
 // Build ID baked in at build time. Compared against /api/version at runtime to
 // detect when a new deploy is live and force-reload stale iOS PWAs.
-const BUILD_ID = process.env.VERCEL_GIT_COMMIT_SHA || `build-${Date.now()}`;
+//
+// On Vercel: uses VERCEL_GIT_COMMIT_SHA (deterministic per deploy).
+// Locally / non-Vercel: 'dev' sentinel. VersionCheck short-circuits when buildId
+// is 'dev' so we don't infinite-loop reload in local development (which would
+// happen if we used Date.now() — different value each module load = perpetual
+// mismatch with /api/version, which also falls back to 'dev').
+const BUILD_ID = process.env.VERCEL_GIT_COMMIT_SHA || 'dev';
 
 const inter = Inter({
   variable: "--font-inter",
@@ -26,7 +32,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
+  // No maximumScale — disabling user zoom violates WCAG 1.4.4 (Resize Text).
+  // Users on small screens, low vision, or with accessibility needs must be able to zoom.
   themeColor: "#0d9488",
 };
 

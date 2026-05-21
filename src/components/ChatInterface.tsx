@@ -46,15 +46,10 @@ export function ChatInterface() {
   const queuedSentencesRef = useRef<Set<string>>(new Set());
 
   // Camera / vision
-  const { isActive: cameraActive, sceneDescription, sceneTimestamp, videoRef, toggle: toggleCamera, isSupported: cameraSupported, error: cameraError } = useCamera();
+  const { isActive: cameraActive, sceneDescription, videoRef, toggle: toggleCamera, isSupported: cameraSupported, error: cameraError } = useCamera();
   // Keep scene in a ref so the transport body can access it without re-creating
   const sceneRef = useRef<string | null>(null);
-  const sceneTimestampRef = useRef(0);
   useEffect(() => { sceneRef.current = sceneDescription; }, [sceneDescription]);
-  useEffect(() => { sceneTimestampRef.current = sceneTimestamp; }, [sceneTimestamp]);
-
-  // Track which message IDs are auto-vision pings (to hide the "user" bubble)
-  const visionMessageIds = useRef<Set<string>>(new Set());
 
   // Transport with dynamic body — reads sceneRef and personalityRef on each request
   const transport = useMemo(() => new DefaultChatTransport({
