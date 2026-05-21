@@ -378,16 +378,38 @@ export function ChatInterface() {
   });
 
   // Notification opt-in — surface once the user has clearly engaged with
-  // the app (>= 2 exchanges = 4 messages). Gated against stacking with
-  // onboarding or the VAD prompt so modals never pile up. We also check
-  // `hasSeenNotificationPrompt()` so a previous decision is honored.
+  // the app. Gated against stacking with onboarding or the VAD prompt so
+  // modals never pile up. We also check `hasSeenNotificationPrompt()` so a
+  // previous decision is honored.
+  //
+  // Rising-edge guard: a useRef ensures we only EVER set the prompt to true
+  // once per page load. Without it, the effect could re-fire (e.g. when
+  // showVADPrompt flips off and messages keep arriving from vision pings)
+  // and re-open the prompt even after the user dismissed it but before
+  // hasSeenNotificationPrompt() has been persisted by the modal.
+  //
+  // Engagement gate also filters out auto-vision parenthetical pings so the
+  // "engagement" threshold reflects real user-driven exchanges, not just
+  // ambient camera commentary.
+  const notifPromptShownRef = useRef(false);
   useEffect(() => {
     if (!mounted) return;
-    if (messages.length < 4) return;
+    if (notifPromptShownRef.current) return;
     if (showOnboarding || showVADPrompt) return;
     if (hasSeenNotificationPrompt()) return;
+    // Count only user-visible messages (skip auto-vision pings starting with '(')
+    const visibleCount = messages.filter((m) => {
+      if (m.role !== 'user') return true;
+      const text = m.parts
+        ?.filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
+        .map((p) => p.text)
+        .join('') ?? '';
+      return !(text.startsWith('(') && text.endsWith(')'));
+    }).length;
+    if (visibleCount < 4) return;
+    notifPromptShownRef.current = true;
     setShowNotificationPrompt(true);
-  }, [messages.length, showOnboarding, showVADPrompt, mounted]);
+  }, [messages, showOnboarding, showVADPrompt, mounted]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -458,6 +480,16 @@ export function ChatInterface() {
     if (messages.length >= 2) {
       summarizeAndSave(messages, personalityRef.current).catch(() => { /* silent */ });
     }
+    // Reset streaming-TTS state so stale references from the cleared
+    // conversation can't re-fire next time. Previously: prevStatusRef stayed
+    // 'streaming' if a clear happened mid-stream, causing the next message to
+    // skip the start-up branch and replay sentences from the old activeMessageId.
+    stopSpeaking();
+    prevStatusRef.current = 'ready';
+    spokenLengthRef.current = 0;
+    queuedSentencesRef.current.clear();
+    activeMessageIdRef.current = null;
+    lastSpokenTextRef.current = '';
     clearHistory();
     setMessages([]);
   }

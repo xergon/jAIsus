@@ -23,33 +23,65 @@ export interface UseModalA11yOptions {
   ref: React.RefObject<HTMLElement | null>;
 }
 
+// Module-level scroll-lock state: counts how many modals are open and
+// remembers the "natural" body styles + scrollY captured on the FIRST modal
+// open. Subsequent modals stack without re-capturing — fixes the
+// StrictMode-double-invoke / rapid-toggle bug where the second effect would
+// capture the already-locked styles and "restore" them to fixed-position
+// forever, leaving the body stuck on close.
+const lockState: {
+  count: number;
+  scrollY: number;
+  prev: { position: string; top: string; width: string } | null;
+} = { count: 0, scrollY: 0, prev: null };
+
+function acquireScrollLock() {
+  if (lockState.count === 0) {
+    lockState.scrollY = window.scrollY;
+    lockState.prev = {
+      position: document.body.style.position,
+      top: document.body.style.top,
+      width: document.body.style.width,
+    };
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${lockState.scrollY}px`;
+    document.body.style.width = '100%';
+  }
+  lockState.count += 1;
+}
+
+function releaseScrollLock() {
+  lockState.count = Math.max(0, lockState.count - 1);
+  if (lockState.count === 0 && lockState.prev) {
+    document.body.style.position = lockState.prev.position;
+    document.body.style.top = lockState.prev.top;
+    document.body.style.width = lockState.prev.width;
+    window.scrollTo(0, lockState.scrollY);
+    lockState.prev = null;
+  }
+}
+
 export function useModalA11y({ isOpen, onClose, ref }: UseModalA11yOptions) {
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
   // Body scroll lock + capture previously-focused element
   useEffect(() => {
     if (!isOpen) return;
-    // Remember focus to restore on close
+    // Remember focus to restore on close. Captured PER hook instance so each
+    // modal restores to its own opener — even when modals stack.
     previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
 
-    // iOS-safe scroll lock: fix the body in place. `overflow:hidden` alone
-    // is ignored by iOS Safari which lets the page underneath scroll.
-    const scrollY = window.scrollY;
-    const bodyStyle = document.body.style;
-    const prevPosition = bodyStyle.position;
-    const prevTop = bodyStyle.top;
-    const prevWidth = bodyStyle.width;
-    bodyStyle.position = 'fixed';
-    bodyStyle.top = `-${scrollY}px`;
-    bodyStyle.width = '100%';
+    acquireScrollLock();
 
     return () => {
-      bodyStyle.position = prevPosition;
-      bodyStyle.top = prevTop;
-      bodyStyle.width = prevWidth;
-      window.scrollTo(0, scrollY);
-      // Restore focus
-      previouslyFocusedRef.current?.focus?.();
+      releaseScrollLock();
+      // Restore focus only if the previously-focused element is still in the DOM —
+      // otherwise focus() throws or silently focuses the body, breaking keyboard
+      // flow for the next modal.
+      const prev = previouslyFocusedRef.current;
+      if (prev && prev.isConnected) {
+        prev.focus?.();
+      }
     };
   }, [isOpen]);
 

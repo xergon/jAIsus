@@ -215,17 +215,44 @@ self.addEventListener('message', (event) => {
 // Payload (JSON): { title?: string, body?: string, url?: string }
 // Falls back to a generic copy if the payload is missing or unparseable so the
 // user always sees something coherent on push.
-self.addEventListener('push', (event) => {
-  let payload = { title: 'jAIsus', body: 'A new verse for today.', url: '/' };
-  if (event.data) {
-    try { payload = { ...payload, ...event.data.json() }; } catch { /* keep defaults */ }
+//
+// SECURITY: payload comes from the push server, which is trusted because
+// only our server has the VAPID private key. But we still apply belt-and-
+// suspenders:
+//   - Whitelist only the three fields we expect (no spread of arbitrary keys
+//     like `icon`, `actions`, `image` — those could be abused if VAPID leaks).
+//   - Force `url` to a same-origin pathname; cross-origin opens are dropped
+//     to '/'. This is the open-redirect guard.
+function sanitizePushPayload(raw) {
+  const out = { title: 'jAIsus', body: 'A new verse for today.', url: '/' };
+  if (raw && typeof raw === 'object') {
+    if (typeof raw.title === 'string' && raw.title.length <= 80) out.title = raw.title;
+    if (typeof raw.body === 'string' && raw.body.length <= 300) out.body = raw.body;
+    if (typeof raw.url === 'string') {
+      try {
+        const parsed = new URL(raw.url, self.location.origin);
+        // Same-origin only — drops `https://attacker.example.com/...`.
+        if (parsed.origin === self.location.origin) out.url = parsed.pathname + parsed.search;
+      } catch {
+        // Malformed URL — fall back to '/'.
+      }
+    }
   }
+  return out;
+}
+
+self.addEventListener('push', (event) => {
+  let raw = null;
+  if (event.data) {
+    try { raw = event.data.json(); } catch { /* keep defaults */ }
+  }
+  const payload = sanitizePushPayload(raw);
   event.waitUntil(
     self.registration.showNotification(payload.title, {
       body: payload.body,
       icon: '/icon-192.png',
       badge: '/icon-192.png',
-      data: { url: payload.url ?? '/' },
+      data: { url: payload.url },
       tag: 'daily-verse', // collapses duplicates if multiple arrive same day
     })
   );
@@ -233,10 +260,19 @@ self.addEventListener('push', (event) => {
 
 // --- notificationclick: focus an open window or open the app ------------------
 // Tap behavior: bring an existing jAIsus tab forward if there is one;
-// otherwise open a new window at the URL the server told us to.
+// otherwise open a new window at the URL the server told us to (already
+// sanitized to same-origin in sanitizePushPayload above).
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || '/';
+  let url = '/';
+  if (event.notification.data && typeof event.notification.data.url === 'string') {
+    // Defense in depth — re-validate same-origin even though the payload
+    // sanitizer already did. `data` is mutable in some browser implementations.
+    try {
+      const parsed = new URL(event.notification.data.url, self.location.origin);
+      if (parsed.origin === self.location.origin) url = parsed.pathname + parsed.search;
+    } catch { /* keep '/' */ }
+  }
   event.waitUntil(
     (async () => {
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });

@@ -15,16 +15,54 @@ interface UIMessagePart { type: string; text?: string }
 // scripted abuse.
 const CHAT_LIMIT = { capacity: 30, refillRatePerSec: 1 };
 
+// Cap conversation history sent to Anthropic. Users with VERY long sessions
+// would otherwise pay for re-sending all messages every turn — Anthropic
+// charges per input token. 60 messages = ~30 user turns, plenty of context
+// for jAIsus to reference recent exchanges. Beyond that, prompt caching +
+// the conversation-memory summaries fill the gap.
+const MAX_MESSAGES = 60;
+
+// Per-message text cap — defensive against a single absurdly long message
+// being pasted in.
+const MAX_MESSAGE_TEXT = 8000;
+
 export async function POST(req: Request) {
   const rl = rateLimit(`chat:${clientKey(req)}`, CHAT_LIMIT);
   if (!rl.ok) return rateLimitResponse(rl);
 
-  const { messages, sceneDescription, personalityId, memoryContext }: {
-    messages: UIMessage[];
-    sceneDescription?: string;
-    personalityId?: string;
-    memoryContext?: string;
-  } = await req.json();
+  // Parse body defensively — malformed JSON used to throw a raw 500.
+  let body: {
+    messages?: unknown;
+    sceneDescription?: unknown;
+    personalityId?: unknown;
+    memoryContext?: unknown;
+  };
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+
+  if (!Array.isArray(body.messages)) {
+    return Response.json({ error: 'messages must be an array' }, { status: 400 });
+  }
+
+  // Truncate to last MAX_MESSAGES; per-message text capped too.
+  // Cast through unknown to avoid bleeding the untyped body into the AI SDK call.
+  const messages = (body.messages as UIMessage[])
+    .slice(-MAX_MESSAGES)
+    .map((m) => ({
+      ...m,
+      parts: m.parts?.map((p) =>
+        p.type === 'text' && typeof (p as { text: unknown }).text === 'string'
+          ? { ...p, text: ((p as { text: string }).text).slice(0, MAX_MESSAGE_TEXT) }
+          : p
+      ),
+    })) as UIMessage[];
+
+  const sceneDescription = typeof body.sceneDescription === 'string' ? body.sceneDescription : undefined;
+  const personalityId = typeof body.personalityId === 'string' ? body.personalityId : undefined;
+  const memoryContext = typeof body.memoryContext === 'string' ? body.memoryContext : undefined;
 
   // Defensive cap — never trust client-side length. 4000 chars is plenty for
   // ~5 short summaries with formatting; anything longer is either noise or

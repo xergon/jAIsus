@@ -233,16 +233,23 @@ interface SendResult {
 }
 
 export async function GET(req: Request) {
-  // Vercel cron auth — reject anything missing the secret.
+  // Vercel cron auth — FAIL CLOSED when the secret isn't configured.
+  // Previously: `if (cronSecret)` skipped the check entirely when env var was
+  // missing, leaving the route open to anyone (push fan-out / budget abuse).
+  // Now: missing env var → 500 (deployment is misconfigured); wrong header → 401.
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const auth = req.headers.get('authorization');
-    if (auth !== `Bearer ${cronSecret}`) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
+  if (!cronSecret) {
+    return new Response(JSON.stringify({ error: 'CRON_SECRET not configured' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  const auth = req.headers.get('authorization');
+  if (auth !== `Bearer ${cronSecret}`) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? '';

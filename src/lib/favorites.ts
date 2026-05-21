@@ -52,9 +52,20 @@ function unicodeSafeBase64(input: string): string {
 /**
  * Deterministic ID for a favorite. Same (kind, content) always yields the
  * same id, which is what makes toggling idempotent across reloads.
+ *
+ * Previously this took only the first 200 chars of content, which caused
+ * collisions for long messages that shared an opener (toggling A removed B).
+ * Fix: combine a content-length prefix with a sample from the START AND END
+ * of the content. Still bounded so the id stays short, but distinguishes
+ * messages whose first 200 chars match while their endings differ.
  */
 export function favoriteId(kind: Favorite['kind'], content: string): string {
-  const seed = content.slice(0, 200);
+  const len = content.length;
+  // For short content the prefix is the whole thing; for long content,
+  // include a tail slice so endings differentiate near-duplicate openers.
+  const seed = len <= 240
+    ? content
+    : `${len}|${content.slice(0, 120)}|${content.slice(-120)}`;
   return `${kind}:${unicodeSafeBase64(seed)}`;
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   MOODS,
   getMoodContent,
@@ -36,15 +36,31 @@ export function MoodSelector({
   // Local-only — purely for the flash animation. Not the source of truth
   // for what's "selected" (that lives wherever the parent stores it).
   const [flashId, setFlashId] = useState<MoodInfo['id'] | null>(null);
+  // Track the flash timeout so unmount cancels it — otherwise React warns
+  // "state update on unmounted component" if the user picks a mood and then
+  // the empty state disappears (messages arrive) before the 300ms elapses.
+  const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimeoutRef.current !== null) {
+        clearTimeout(flashTimeoutRef.current);
+        flashTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const handlePick = useCallback(
     (mood: MoodInfo) => {
       const content = getMoodContent(mood.id);
       setFlashId(mood.id);
-      // Reset flash after 300ms so a second tap on the same chip
-      // re-triggers the visual confirmation.
-      window.setTimeout(() => {
+      // Clear any in-flight flash timer so a rapid second pick resets cleanly.
+      if (flashTimeoutRef.current !== null) {
+        clearTimeout(flashTimeoutRef.current);
+      }
+      flashTimeoutRef.current = setTimeout(() => {
         setFlashId((current) => (current === mood.id ? null : current));
+        flashTimeoutRef.current = null;
       }, 300);
       onPick(mood, content);
     },

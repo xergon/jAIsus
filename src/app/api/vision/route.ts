@@ -1,4 +1,15 @@
+import { clientKey, rateLimit, rateLimitResponse } from '@/lib/rate-limit';
+
 export const maxDuration = 15;
+
+// Vision is auto-pinged by the client every N seconds while the camera is on,
+// AND hits paid Gemini per call. Cap to 30-burst / 1-per-3s sustained so a
+// scripted attacker can't loop-spam the endpoint to drain Gemini quota.
+const VISION_LIMIT = { capacity: 30, refillRatePerSec: 1 / 3 };
+
+// 2 MB of base64 = ~1.5 MB binary, plenty for a 640x480 JPEG at quality 0.7
+// (typical: 30-80 KB). Caps a single-request CPU/cost spike.
+const MAX_IMAGE_BASE64_LENGTH = 2_000_000;
 
 const SCENE_PROMPT = `You are a witty divine observer with x-ray insight into human behavior. Describe what you see in this camera frame in 1-2 short sentences. Be funny, slightly ironic, and observational — like a comedian doing crowd work from heaven.
 
@@ -12,19 +23,37 @@ Examples of the tone:
 Keep it SHORT (1-2 sentences max). Be playful, never mean. This description will be shown as a caption under a camera feed.`;
 
 export async function POST(req: Request) {
+  const rl = rateLimit(`vision:${clientKey(req)}`, VISION_LIMIT);
+  if (!rl.ok) return rateLimitResponse(rl);
+
   const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return Response.json({ error: 'Gemini API key not configured' }, { status: 500 });
   }
 
   try {
-    const { image }: { image: string } = await req.json();
-    if (!image) {
-      return Response.json({ error: 'No image provided' }, { status: 400 });
+    let body: { image?: unknown };
+    try {
+      body = await req.json();
+    } catch {
+      return Response.json({ error: 'Invalid JSON' }, { status: 400 });
     }
 
-    // Strip data URL prefix if present (e.g., "data:image/jpeg;base64,...")
-    const base64Data = image.includes(',') ? image.split(',')[1] : image;
+    if (typeof body.image !== 'string' || body.image.length === 0) {
+      return Response.json({ error: 'No image provided' }, { status: 400 });
+    }
+    if (body.image.length > MAX_IMAGE_BASE64_LENGTH) {
+      return Response.json({ error: 'Image too large' }, { status: 413 });
+    }
+
+    // Strip data URL prefix if present (e.g., "data:image/jpeg;base64,...").
+    // Tolerate malformed prefixes — split[1] may be empty/undefined.
+    const base64Data = body.image.includes(',')
+      ? (body.image.split(',')[1] ?? '')
+      : body.image;
+    if (!base64Data) {
+      return Response.json({ error: 'Empty image payload' }, { status: 400 });
+    }
 
     // Use Gemini REST API directly (avoids SDK base64 encoding issues).
     // Model: gemini-2.5-flash (current stable; previous 'gemini-3-flash-preview' didn't exist).

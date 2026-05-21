@@ -41,7 +41,16 @@ export function PrayerRequestForm({ isOpen, onClose }: PrayerRequestFormProps) {
 
     let storageFailed = false;
     try {
-      const prayers = JSON.parse(localStorage.getItem('jaisus-prayers') || '[]');
+      // Validate the stored payload before mutating — older/poisoned data
+      // (non-array) would otherwise crash .push() and silently lose this prayer.
+      let prayers: Array<{ id: string; text: string; timestamp: number }> = [];
+      try {
+        const raw = JSON.parse(localStorage.getItem('jaisus-prayers') || '[]');
+        if (Array.isArray(raw)) prayers = raw;
+      } catch {
+        // Stored data was malformed JSON. Start fresh; the user's intent is
+        // still honored and the bad entry gets overwritten by the next setItem.
+      }
       prayers.push({ id: Date.now().toString(), text: text.trim(), timestamp: Date.now() });
       localStorage.setItem('jaisus-prayers', JSON.stringify(prayers));
     } catch (err) {
