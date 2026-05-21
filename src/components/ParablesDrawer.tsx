@@ -3,6 +3,7 @@
 import { useState, useRef } from 'react';
 import { parables } from '@/lib/parables';
 import { useModalA11y } from '@/hooks/useModalA11y';
+import { EmptyState } from '@/components/EmptyState';
 
 interface ParablesDrawerProps {
   isOpen: boolean;
@@ -66,6 +67,20 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
         </div>
 
         <div className="overflow-y-auto px-4 pb-6 max-h-[60vh]">
+          {filtered.length === 0 && search !== '' && (
+            <EmptyState
+              icon="🔍"
+              title="No parables match"
+              description={`Nothing for "${search}". Try another word or theme.`}
+            />
+          )}
+          {filtered.length === 0 && search === '' && (
+            <EmptyState
+              icon="📖"
+              title="No parables available"
+              description="There aren't any parables loaded right now."
+            />
+          )}
           <div className="space-y-2 pt-2">
             {filtered.map(parable => (
               <div

@@ -3,6 +3,10 @@
 import { useState, useRef } from 'react';
 import { TEACHING_TOPICS } from '@/lib/constants';
 import { useModalA11y } from '@/hooks/useModalA11y';
+import { SkeletonCard } from '@/components/Skeleton';
+import { EmptyState } from '@/components/EmptyState';
+import { toast } from '@/lib/toast';
+import { track } from '@/lib/analytics';
 
 interface TeachingPlayerProps {
   isOpen: boolean;
@@ -33,16 +37,20 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
       if (!res.ok) {
         // Could be 429 (rate limit) or 400 (invalid topic) — surface generic message
         setTeaching('Unable to generate teaching right now. Please try again in a moment.');
+        toast.error('Could not generate teaching right now.');
         return;
       }
       const data = await res.json();
       if (typeof data.teaching === 'string' && data.teaching.length > 0) {
         setTeaching(data.teaching);
+        track('teaching.generated', { topic });
       } else {
         setTeaching('Unable to generate teaching at this time. Please try again.');
+        toast.error('Could not generate teaching right now.');
       }
     } catch {
       setTeaching('Unable to generate teaching at this time. Please try again.');
+      toast.error('Could not generate teaching right now.');
     } finally {
       setLoading(false);
     }
@@ -93,17 +101,9 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
         {/* Teaching content */}
         <div className="flex-1 overflow-y-auto px-5 pb-5">
           {loading && (
-            <div className="flex flex-col items-center py-10 animate-fade-in">
-              <div className="flex gap-1.5">
-                {[0, 1, 2].map(i => (
-                  <div
-                    key={i}
-                    className="w-2.5 h-2.5 rounded-full bg-teal-400 animate-bounce"
-                    style={{ animationDelay: `${i * 0.15}s` }}
-                  />
-                ))}
-              </div>
-              <p className="text-sm text-stone-500 mt-3">Preparing teaching...</p>
+            <div className="py-2 animate-fade-in" aria-live="polite" aria-busy="true">
+              <span className="sr-only">Preparing teaching...</span>
+              <SkeletonCard />
             </div>
           )}
 
@@ -143,10 +143,11 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
           )}
 
           {!loading && !teaching && !selectedTopic && (
-            <div className="text-center py-10 text-stone-400">
-              <p className="text-3xl mb-2">📖</p>
-              <p className="text-sm">Select a topic above to begin</p>
-            </div>
+            <EmptyState
+              icon="📖"
+              title="Pick a topic"
+              description="Tap one of the topics above to receive a teaching."
+            />
           )}
         </div>
       </div>

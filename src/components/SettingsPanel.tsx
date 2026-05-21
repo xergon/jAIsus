@@ -5,6 +5,7 @@ import { VOICE_OPTIONS, DEFAULT_VOICE_ID } from '@/lib/constants';
 import { setStoredVoiceId } from '@/hooks/useSpeechSynthesis';
 import { PERSONALITIES } from '@/lib/personalities';
 import { useModalA11y } from '@/hooks/useModalA11y';
+import { toast } from '@/lib/toast';
 
 const VISION_INTERVAL_OPTIONS = [
   { value: 15, label: '15s' },
@@ -80,6 +81,8 @@ export function SettingsPanel({
   function handleVoiceChange(voiceId: string) {
     setSelectedVoice(voiceId);
     setStoredVoiceId(voiceId);
+    const voice = VOICE_OPTIONS.find(v => v.id === voiceId);
+    if (voice) toast.info(`Voice set to ${voice.name}`);
   }
 
   async function handleTestVoice() {
@@ -95,6 +98,7 @@ export function SettingsPanel({
   function handleClear() {
     onClearHistory();
     setCleared(true);
+    toast.success('Chat history cleared');
     if (clearedTimeoutRef.current) clearTimeout(clearedTimeoutRef.current);
     clearedTimeoutRef.current = setTimeout(() => setCleared(false), 2000);
   }
@@ -125,7 +129,13 @@ export function SettingsPanel({
               {PERSONALITIES.map(p => (
                 <button
                   key={p.id}
-                  onClick={() => onPersonalityChange(p.id)}
+                  onClick={() => {
+                    onPersonalityChange(p.id);
+                    // Only toast on an actual change, not when re-tapping the current selection.
+                    if (p.id !== personalityId) {
+                      toast.success(`Switched to ${p.name}`);
+                    }
+                  }}
                   className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-left transition-all ${
                     personalityId === p.id
                       ? 'bg-amber-100 border-2 border-amber-500 shadow-sm'

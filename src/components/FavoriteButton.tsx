@@ -2,6 +2,8 @@
 
 import { useFavorites } from '@/hooks/useFavorites';
 import type { Favorite } from '@/lib/favorites';
+import { toast } from '@/lib/toast';
+import { track } from '@/lib/analytics';
 
 interface Props {
   kind: Favorite['kind'];
@@ -24,7 +26,17 @@ export function FavoriteButton({
   const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     // Don't bubble — these often sit inside larger clickable cards.
     e.stopPropagation();
+    // Capture pre-toggle state so we know which direction we're going.
+    const wasFavorited = favorited;
     toggle({ kind, content, context });
+    if (wasFavorited) {
+      // on → off: stay silent (no toast spam on remove) — analytics only.
+      track('favorite.removed', { kind });
+    } else {
+      // off → on: confirm with a brief success toast.
+      toast.success('Saved to favorites');
+      track('favorite.added', { kind });
+    }
   };
 
   const dimensions = size === 'md' ? 'w-11 h-11' : 'w-9 h-9';

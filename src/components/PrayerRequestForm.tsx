@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useModalA11y } from '@/hooks/useModalA11y';
+import { toast } from '@/lib/toast';
+import { track } from '@/lib/analytics';
 
 interface PrayerRequestFormProps {
   isOpen: boolean;
@@ -37,17 +39,31 @@ export function PrayerRequestForm({ isOpen, onClose }: PrayerRequestFormProps) {
   function handleSubmit() {
     if (!text.trim()) return;
 
+    let storageFailed = false;
     try {
       const prayers = JSON.parse(localStorage.getItem('jaisus-prayers') || '[]');
       prayers.push({ id: Date.now().toString(), text: text.trim(), timestamp: Date.now() });
       localStorage.setItem('jaisus-prayers', JSON.stringify(prayers));
     } catch (err) {
       console.warn('Failed to persist prayer:', err);
+      storageFailed = true;
       // Still show success — the request was received emotionally even if storage failed
     }
 
     setSubmitted(true);
     setText('');
+
+    // Privacy: no content tracked, only the fact of submission.
+    track('prayer.submitted');
+
+    if (storageFailed) {
+      // Soft error — user still sees the success UI; this just acknowledges the storage issue.
+      toast.error('Could not save your prayer — but your intent is heard.');
+    } else {
+      // Supplements the in-modal confirmation (which auto-dismisses after 2.5s).
+      toast.success('Your prayer has been received');
+    }
+
     closeTimeoutRef.current = setTimeout(() => {
       setSubmitted(false);
       onClose();
