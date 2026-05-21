@@ -1,6 +1,6 @@
 # jAIsus — Complete Handover Document
 
-**Last updated**: 2026-04-26
+**Last updated**: 2026-04-27
 **Repo**: github.com/xergon/jAIsus
 **Live**: https://jaisus.vercel.app
 **Deploy**: Auto-deploy from `main` via Vercel (GitHub integration)
@@ -99,6 +99,67 @@ All 5 panels — `ParablesDrawer`, `PrayerRequestForm`, `TeachingPlayer`, `Setti
 
 ---
 
+## Recent Additions — Wave 7 (Feature expansions)
+
+Wave 7 added five user-facing features that all share the same shape: pure lib in `src/lib/`, optional React hook in `src/hooks/`, presentational component in `src/components/`. Mutations dispatch `CustomEvent`s on `window`; subscribers re-read on the next tick. Safe to call from anywhere (libs, async callbacks, event handlers).
+
+### New libs (`src/lib/`)
+- **`conversation-memory.ts`** — persists one-sentence summaries of past sessions ("yesterday we talked about your father…"). Same shape as `favorites.ts`: `ConversationMemory` interface (`id`, `summary`, `timestamp`, `personalityId`, `messageCount`), capped at 30 entries, `crypto.randomUUID()` with timestamp fallback, dispatches `jaisus-memories-changed` on change. `memoriesAsContext(limit)` renders the most recent N as a system-prompt-ready block. **Currently saved locally only — not yet sent server-side.**
+- **`streaks.ts`** — consecutive-day streak tracker. `StreakState` (`current`, `longest`, `lastActive` as `YYYY-MM-DD`, `totalDays`). LOCAL-time calendar math (a "day" matches the user's wall clock across timezones), DST-safe via `Math.round(ms/86_400_000)`. Same-day re-entry no-op, yesterday → `current+=1`, anything older → reset to 1. Dispatches `jaisus-streak-changed`. Exports `dateKey(d)`, `recordActivity(now?)`, `clearStreak()`.
+- **`mood-content.ts`** — 10 moods (`anxious`, `grateful`, `sad`, `angry`, `lonely`, `doubting`, `hopeful`, `overwhelmed`, `peaceful`, `lost`) → themed subsets of verses / kindness / parables / prompts. Selection is the FIRST match in each pool, so mood → bundle is stable (no `Math.random`). `MoodInfo` has `id`, `label`, `emoji`, `acknowledgment`, plus four arrays of theme/category keys. `getMoodContent(mood)` returns `{ verse, kindness, parableTitle, parableId, promptText }` with first-pool fallbacks so verse/kindness are never null when data is present.
+- **`conversation-export.ts`** — markdown/JSON/plaintext export of chat + favorites. Pure helpers `buildExport()` and `formatExport(payload, format)` are SSR-safe. `downloadExport({format, …})` does the Blob + object URL + temporary anchor dance, returns true on success. Validates persisted shapes defensively — older clients writing a different schema can't bleed fields into the download. Strips `[EMOTION:tag]` prefixes from assistant messages. Favorites grouped by kind (`message` → `teaching` → `verse` → `parable`), newest first within each group.
+
+### New hooks (`src/hooks/`)
+- **`useConversationMemory.ts`** — wraps the conversation-memory lib. Hydrates after mount, subscribes to both `jaisus-memories-changed` and the cross-tab `storage` event. Workhorse: `summarizeAndSave(messages, personalityId)` strips messages to `{role, text}`, skips trivial conversations (<2 messages or <100 chars), POSTs `/api/summarize`, persists the returned summary. Errors are swallowed — never interrupts the user with a failed background save.
+- **`usePullToRefresh.ts`** — generic pull-to-refresh gesture. Engages only when scroll container is at the top, vertical-only (aborts on horizontal swipe past 8px), 0.5x resistance for rubbery feel, clamps to `maxPull` (default 120px), triggers at `threshold` (default 80px). Holds indicator during async `onRefresh()`, animates back to 0 with ease-out cubic over 220ms (instant under `prefers-reduced-motion`). Gesture state in refs; React state updated via rAF.
+- **`useLongPress.ts`** — touch-and-hold (+ optional right-click). 500ms default threshold, 10px movement budget so a real scroll/drag cancels naturally. On successful long-press, trailing `touchend`/`mouseup` gets `preventDefault()` so the parent's `onClick` doesn't also fire. `enableRightClick` (default true) fires immediately on `contextmenu`. Returns a `UseLongPressBind` ready to spread on any React element.
+
+### New components (`src/components/`)
+- **`StreakBadge.tsx`** — chip "🔥 N day streak". Tiers at 7+ (richer amber) and 30+ (gradient + white). `autoRecord` (default true) calls `recordActivity()` once on mount — idempotent within the calendar day. Renders `null` on SSR + first paint (state depends on localStorage + local-time math). `role="status" aria-live="polite"` with longest-streak in the aria-label.
+- **`MoodSelector.tsx`** — 2-col-mobile / 5-col-desktop grid of 10 mood chips with emoji + label. Tapped tile flashes amber for ~300ms (visual feedback only; selected state lives in the parent). On pick: `getMoodContent(mood.id)` then `onPick(mood, content)`.
+- **`PullToRefreshIndicator.tsx`** — circular rotating arrow / spinner overlay paired with `usePullToRefresh`. NOT wired yet — available for future use.
+- **`ContextMenu.tsx`** — anchor-positioned dropdown. Position clamped to viewport via `useLayoutEffect` (renders off-screen on first frame to measure, snaps on next layout). Keyboard: ArrowUp/Down wrap-around, Tab/Shift+Tab cycle focus, Escape closes, Enter/Space activates. First menuitem auto-focused. 120ms fade + scale-from-0.95 open animation. `destructive` items get rose palette. NOT wired into ChatMessage yet — available for future use.
+- **`ParableReader.tsx`** — full-screen immersive reading mode. Serif typography, drop-cap, TTS playback toggle, `FavoriteButton`, `ShareButton`, slide-in-from-right (instant under reduced motion). Replaces the inline `expanded` state from `ParablesDrawer`. Modal a11y via `useModalA11y`. Fires `parable.opened`/`parable.closed`/`parable.listen` analytics. `Ask jAIsus about this parable` CTA closes the reader AND the drawer above it.
+- **`ExportButton.tsx`** — trigger + dropdown menu for the three export formats. Click-outside / Escape close (Escape returns focus to the trigger). Arrow keys / Home / End navigate options. Calls `downloadExport({format})`, toasts success/failure, fires `export.downloaded`.
+
+### Wiring
+- **`ChatInterface.tsx`** mounts `<StreakBadge />` and `<MoodSelector />` in the empty-state block. Mood pick → `sendMessage({text: content.promptText ?? "I'm feeling {label}"})` with `mood.picked` analytics. Imports `useConversationMemory`; `handleClearHistory` calls `summarizeAndSave(messages, personalityRef.current)` (best-effort, async, doesn't block clearing) before wiping.
+- **`ParablesDrawer.tsx`** uses `readingParable: Parable | null` state; tapping a card opens the full `ParableReader`.
+- **`SettingsPanel.tsx`** mounts `<ExportButton />` in the data section above the Clear-history button.
+
+---
+
+## Recent Additions — Wave 8 (System features)
+
+Wave 8 added infrastructure plumbing: a service worker for offline / app-shell caching, an OpenGraph image generator for social unfurls, and the `/api/summarize` route that powers `useConversationMemory`. None of this is visible to the user during normal chat — it's the "feels like a real app" layer.
+
+### New API routes
+- **`/api/summarize`** — POST. Generates a single-sentence summary of a conversation via Claude Haiku for cross-session memory. Request `{messages: Array<{role, text}>}`. Response `{summary: string}` (empty on LLM failure — graceful no-op). Rate-limited (burst 20, 1/15s sustained). Truncates input from the FRONT so the most recent 8000 chars survive. 60-token output cap, past tense from the user's perspective. `maxDuration = 15`.
+- **`/api/og`** — GET. Dynamic OpenGraph PNG via `next/og` (Satori-backed). Three variants: `?type=default` (branded "Talk to jAIsus." card), `?type=verse&text=&ref=` (verse card with translucent ornamental quote marks), `?type=message&text=` (message card with "FROM JAISUS" header). Shared `cardFrame` with cream background, amber radial glow upper-right, brand wordmark + tagline bottom-left, URL bottom-right. **Edge runtime**, 1200x630 PNG, `Cache-Control: public, max-age=3600, s-maxage=86400, immutable`. Defensive: unknown `type` → default; control chars stripped; length-clamped; render exceptions fall back to default rather than 500. File is `.ts` (not `.tsx`), so JSX is built with `React.createElement` calls. **NOT yet wired** into `metadata.openGraph` — see Pending Work.
+
+### New libs
+- **`sw-config.ts`** — `SW_VERSION = 'v1'` (must match `CACHE_VERSION` in `public/sw.js` — these version independently of build IDs since the SW cache strategy can change without a code deploy) + `SW_PATH = '/sw.js'`.
+
+### New components
+- **`ServiceWorkerRegistration.tsx`** — production-only client component that registers `/sw.js` via `requestIdleCallback` (1.5s `setTimeout` fallback). Short-circuits in dev to avoid HMR confusion. Returns `null` (pure side-effect). Mounted in `layout.tsx` between `<AnalyticsInit />` and `<ToastProvider />`.
+
+### New public asset
+- **`public/sw.js`** — vanilla JS service worker. Strategies:
+  - **`/api/*`** — pass through (never cache chat/TTS/vision/version/summarize)
+  - **HTML navigations** — network-first with 3s timeout, fall back to cache, fall back to an inline offline HTML page (warm radial gradient, "j**AI**sus" wordmark, pulsing "Waiting for a signal" dot)
+  - **Static assets** — cache-first with background revalidation. Cap of 50 entries via FIFO eviction; only `response.type === 'basic'` (same-origin) responses are stored.
+  - **App shell** precached on `install`: `/`, `/manifest.json`, `/jaisus-embraces.mp4`, `/jaisus-prays.mp4`. Individual 404s are silently skipped (install never fails).
+  - `skipWaiting()` + `clients.claim()` on activate. Old `jaisus-*` caches with non-matching `CACHE_VERSION` are deleted.
+  - Accepts `{type: 'SKIP_WAITING'}` postMessage for forced activation (not currently sent — VersionCheck owns the reload-on-deploy path).
+
+### NOT yet wired (intentional)
+- `usePullToRefresh` + `PullToRefreshIndicator` — empty state integration is a small follow-up.
+- `useLongPress` + `ContextMenu` — attach to ChatMessage for Copy / Save / Share / Quote.
+- `conversationMemory` server-side injection — memories save locally but `/api/chat` doesn't read them yet. `memoriesAsContext()` is ready to slot in.
+- `metadata.openGraph` in `layout.tsx` doesn't yet point at `/api/og`.
+
+---
+
 ## Tech Stack
 
 - **Framework**: Next.js 16.2.3 (BREAKING CHANGES from older versions — always check `node_modules/next/dist/docs/` before writing code)
@@ -175,35 +236,44 @@ src/
 │   ├── api/
 │   │   ├── chat/route.ts          # Multi-model chat with prompt caching + rate limit
 │   │   ├── daily/route.ts         # Daily verse + Haiku-generated reflection (24h cache)
+│   │   ├── og/route.ts            # NEW: dynamic OG PNG (next/og, edge runtime, 3 variants)
+│   │   ├── summarize/route.ts     # NEW: 1-sentence conversation summary (Claude Haiku, rate-limited)
 │   │   ├── teachings/route.ts     # Teaching generation (Haiku, topic allowlist, rate limit)
 │   │   ├── tts/route.ts           # ElevenLabs TTS wrapper (voiceId allowlist)
 │   │   ├── version/route.ts       # Returns deployed build ID for stale-build self-heal
 │   │   └── vision/route.ts        # Gemini 2.5 Flash REST (key in header, no error leakage)
-│   ├── layout.tsx                 # Root layout — VersionCheck, AnalyticsInit, ToastProvider, ErrorBoundary
+│   ├── layout.tsx                 # Root layout — VersionCheck, AnalyticsInit, ServiceWorkerRegistration, ToastProvider, ErrorBoundary
 │   ├── page.tsx                   # Entry → ChatInterface
 │   └── globals.css                # Tailwind + custom animations
 ├── components/
 │   ├── ActionButtons.tsx          # Tab bar + feature buttons (Saved, Community, Settings, Prayer, Parables, Teachings)
 │   ├── AnalyticsInit.tsx          # Boots analytics + initial app.boot event
 │   ├── AnimatedJesus.tsx          # Dual-video engine with emotion swapping, decoder-safe probes
-│   ├── ChatInterface.tsx          # Main orchestrator (~680 lines)
+│   ├── ChatInterface.tsx          # Main orchestrator (~700 lines)
 │   ├── ChatMessage.tsx            # Message display with favorite + share buttons
 │   ├── CommunityPlaceholder.tsx   # "Coming soon" placeholder sheet
+│   ├── ContextMenu.tsx            # NEW: anchored, keyboard-navigable dropdown (unwired — for future use)
 │   ├── DailyKindness.tsx          # Act-of-kindness-of-the-day card
 │   ├── DailyVerse.tsx             # Verse-of-the-day card
 │   ├── EmptyState.tsx             # Friendly empty state (icon + title + description + CTA)
 │   ├── ErrorBoundary.tsx          # Class-based error boundary with warm fallback UI
+│   ├── ExportButton.tsx           # NEW: dropdown menu over conversation-export lib (markdown/json/txt)
 │   ├── FavoriteButton.tsx         # Heart toggle on every message
 │   ├── FavoritesPanel.tsx         # Slide-up sheet listing all favorites
 │   ├── GreetingHeader.tsx         # Time-aware greeting (local time → UTC SSR guarded)
 │   ├── HeroSection.tsx            # Jesus visual + voice visualizers
+│   ├── MoodSelector.tsx           # NEW: 2x5 / 5x2 grid of 10 mood chips
 │   ├── OnboardingOverlay.tsx      # 4-slide first-run tour
-│   ├── ParablesDrawer.tsx         # Parable browser (search + expand + Ask jAIsus)
+│   ├── ParableReader.tsx          # NEW: full-screen immersive reading mode + TTS + drop-cap typography
+│   ├── ParablesDrawer.tsx         # Parable browser (tap opens ParableReader instead of inline expand)
 │   ├── PersonalitySwitcher.tsx    # Horizontal chip strip below hero (9 personalities)
 │   ├── PrayerRequestForm.tsx      # Prayer submission (localStorage)
-│   ├── SettingsPanel.tsx          # All settings (personality, autoSpeak, vision interval, voice, clear history)
+│   ├── PullToRefreshIndicator.tsx # NEW: visual companion to usePullToRefresh (unwired — for future use)
+│   ├── ServiceWorkerRegistration.tsx # NEW: production-only client component that registers /sw.js
+│   ├── SettingsPanel.tsx          # All settings (personality, autoSpeak, vision interval, voice, EXPORT, clear)
 │   ├── ShareButton.tsx            # Web Share API + clipboard fallback
 │   ├── Skeleton.tsx               # Shimmer placeholders (Skeleton + SkeletonMessage + SkeletonCard)
+│   ├── StreakBadge.tsx            # NEW: "🔥 N day streak" chip; auto-records activity on mount
 │   ├── SuggestedPrompts.tsx       # Daily rotating horizontal chip strip
 │   ├── TeachingPlayer.tsx         # Teaching generator + player (topic chips + TTS)
 │   ├── Toast.tsx                  # ToastProvider — top-center stack, max 3 visible
@@ -212,28 +282,42 @@ src/
 ├── hooks/
 │   ├── useCamera.ts               # Camera + Gemini vision loop + generation-counter race guard
 │   ├── useChatHistory.ts          # localStorage persistence (100-message cap)
+│   ├── useConversationMemory.ts   # NEW: wraps conversation-memory lib + summarizeAndSave() POSTs /api/summarize
 │   ├── useFavorites.ts            # React wrapper over favorites lib + cross-tab sync
 │   ├── useHaptics.ts              # 8 named patterns, prefers-reduced-motion, opt-out
+│   ├── useLongPress.ts            # NEW: touch-and-hold + right-click gesture (unwired — for future use)
 │   ├── useModalA11y.ts            # Focus trap + scroll lock + Escape + focus restore
+│   ├── usePullToRefresh.ts        # NEW: pull-to-refresh gesture (unwired — for future use)
 │   ├── useSpeechRecognition.ts    # STT — continuous mode, 2s silence timeout
 │   ├── useSpeechSynthesis.ts      # TTS with streaming queue, blob URL leak tracking
 │   └── useVoiceState.ts           # State machine (idle/listening/processing/speaking)
 └── lib/
     ├── analytics.ts               # Privacy-first event buffer (sendBeacon-batched)
     ├── constants.ts               # 16 teaching topics, 12 voice options, ElevenLabs settings
+    ├── conversation-export.ts     # NEW: markdown/json/plaintext export of chat + favorites
+    ├── conversation-memory.ts     # NEW: persists one-sentence summaries of past sessions (localStorage)
     ├── daily-kindness.ts          # 45 kindness acts, day-of-year rotation
     ├── daily-verse.ts             # 63 verses, deterministic UTC day-of-year pick
     ├── emotions.ts                # Emotion→video mapping + alias table
     ├── favorites.ts               # localStorage + CustomEvent change-broadcast
     ├── greeting.ts                # Time-of-day + day-of-week greeting pool
+    ├── mood-content.ts            # NEW: 10 moods → curated verse/kindness/parable/prompt bundles
     ├── onboarding.ts              # First-run flag persistence
     ├── parables.ts                # 50 parables database
     ├── personalities.ts           # 9 personalities with prompts + provider
     ├── rate-limit.ts              # Token-bucket per-IP
+    ├── streaks.ts                 # NEW: consecutive-day streak (local-time calendar, DST-safe)
     ├── suggested-prompts.ts       # 30 curated chips, daily round-robin
+    ├── sw-config.ts               # NEW: SW_VERSION + SW_PATH constants
     ├── system-prompt.ts           # TEACHING_PROMPT only (SYSTEM_PROMPT removed)
     ├── toast.ts                   # Imperative toast API (CustomEvent dispatcher)
     └── types.ts                   # ActivePanel, VoiceState, Parable, PrayerRequest
+
+public/
+├── sw.js                          # NEW: service worker (network-first HTML, cache-first static, /api/* pass-through)
+├── manifest.json                  # PWA manifest
+├── icon-{192,512}.png
+└── (video + image assets…)
 ```
 
 ---
@@ -339,6 +423,18 @@ One hook gives every panel: focus trap (Tab/Shift+Tab cycles inside), iOS-safe s
 ### 20. iOS-PWA Stale-Build Self-Heal
 `VersionCheck` polls `/api/version` on focus / `visibilitychange` / a 5-minute interval. If the server's buildId differs from the one baked into the page, it hard-navigates to a cache-busted URL (`?_v=Date.now()`). The buildId is `VERCEL_GIT_COMMIT_SHA` on prod and `'dev'` locally; the local check short-circuits so we don't infinite-loop reload in dev. `next.config.ts` sends `Cache-Control: no-store` on HTML routes; `layout.tsx` adds defense-in-depth `<meta http-equiv>` cache headers.
 
+### 21. Pull-to-Refresh Resistance Pattern (NEW)
+`usePullToRefresh` applies square-root-like resistance (`dy * 0.5`) so the indicator feels rubbery rather than 1:1 with the finger — a 100px finger drag becomes a 50px indicator pull. The clamp is at `maxPull` (default 120px) so the user can't drag arbitrarily far even with a fast flick. Gesture state lives in refs (`startYRef`, `startXRef`, `activeRef`, `abortedRef`, `pullRef`) so touchmove doesn't re-render React. React state is only updated via `requestAnimationFrame`, capping repaints at one per frame. On release past threshold: `pullRef` snaps to the threshold, `setIsRefreshing(true)`, the async `onRefresh()` promise drives the lifecycle, and the indicator animates back to 0 via ease-out cubic over 220ms (instant under `prefers-reduced-motion`).
+
+### 22. Long-Press Movement-Cancel Pattern (NEW)
+`useLongPress` arms a `setTimeout(threshold, …)` on touchstart/mousedown, but cancels it if the pointer moves past `movementCancelThreshold` (default 10px) — this lets the user scroll or drag naturally without triggering a context menu. Distance is checked as `dx² + dy² > t²` to avoid the sqrt. On a successful long-press, the trailing `touchend`/`mouseup` gets `preventDefault()` so the parent's `onClick` doesn't fire too (otherwise tapping to dismiss a long-press menu would also click the underlying message). `enableRightClick` (default true) fires immediately on `contextmenu` since right-click already has the intended semantics with no hold delay needed.
+
+### 23. Service Worker + VersionCheck Coexistence (NEW)
+The SW deliberately PASSES THROUGH `/api/*` requests so `VersionCheck`'s `/api/version` poll is unaffected — fresh build IDs are always fetched from network, never from cache. For HTML navigations the SW is network-first with a 3s timeout, so a new deploy is fetched and cached on first visit; offline / network-timeout users get the previous cached HTML. Static assets are cache-first with background revalidation. Together: when `VersionCheck` detects a build mismatch, it hard-reloads to `?_v=Date.now()`; the SW pulls the new HTML and updates its cache. The SW also has its own `CACHE_VERSION` separate from build IDs so the cache strategy can change without a code deploy (bump `SW_VERSION` in `src/lib/sw-config.ts` AND `CACHE_VERSION` in `public/sw.js` together — they must match).
+
+### 24. Edge-Runtime OG Image Rendering (NEW)
+`/api/og` uses `export const runtime = 'edge'` and `next/og`'s `ImageResponse` (Satori-backed React-to-PNG). Edge is fast and globally distributed; PNGs are deterministic for the same input, so they're aggressively cached (`max-age=3600, s-maxage=86400, immutable`). Three variants (`default`, `verse`, `message`) share a common `cardFrame` builder. JSX is built via explicit `createElement` calls rather than .tsx syntax — the route file is `.ts` per the project spec, and the visual output is identical. Defensive throughout: malformed input is sanitized, unknown `type` falls back to default, and even a Satori render exception falls back to the default card rather than 500ing — crawlers send weird stuff and we never want a broken image to be the unfurl.
+
 ---
 
 ## The 9 Personalities
@@ -434,34 +530,40 @@ The Mac user is `resorb` and the repo lives at:
 
 ### Recently Completed (struck through items from prior handover)
 - ~~Verify personality switching works end-to-end~~ — works; prompt caching applied.
-- ~~Add `XAI_API_KEY` and `DEEPSEEK_API_KEY` to `.env.local`~~ — still pending locally; needed for full local testing.
 - ~~Find a Trump-like voice~~ — still placeholder.
 - ~~Remove debug `console.log` from chat route~~ — done.
 - ~~Mobile video first-load reliability~~ — much improved with dimension check + rAF + 12s safety.
 - ~~Rate limiting on vision API calls~~ — done across chat/teachings/daily; vision route itself still unrate-limited (camera capture is throttled client-side to 10s).
+- ~~Conversation export (markdown / audio mix)~~ — markdown + JSON + plaintext shipped in Wave 7 (`ExportButton` in Settings).
+- ~~FavoritesPanel sharing-export — export all favorites as markdown~~ — covered by the conversation export above.
+- ~~PWA service worker for offline shell + push notification readiness~~ — service worker shipped (Wave 8); push notifications still TODO.
 
 ### High Priority
 - [ ] **Add `XAI_API_KEY` and `DEEPSEEK_API_KEY` to `.env.local`** for local testing
 - [ ] **Find a Trump-like voice** in ElevenLabs (current Bill voice is placeholder)
 - [ ] **Implement `/api/analytics`** to actually receive events. Right now the client sends to a 404 and drops the events.
 - [ ] **Add provider error fallback** — if DeepSeek/Grok fails, fall back to Claude gracefully
+- [ ] **Wire conversation memory server-side** — `useConversationMemory.summarizeAndSave` already persists summaries on `handleClearHistory`; next step is to send the last N memories in the transport body and have `/api/chat` inject them into the personality system message. `memoriesAsContext(limit)` is ready to slot in.
+- [ ] **Wire OG meta tags into `layout.tsx`** — `/api/og` works but nothing links to it yet. Add `metadata.openGraph` and `metadata.twitter` pointing at `/api/og?type=default` (and add a verse variant on the daily verse share button).
 
 ### Medium Priority
-- [ ] **Voice interruption** — let the user cut off jAIsus mid-sentence by holding the mic (currently you must wait for the sentence to finish)
-- [ ] **PWA service worker** for offline shell + push notification readiness
-- [ ] **Push notifications** for daily verse / kindness reminders (opt-in)
-- [ ] **Rate limit on `/api/vision`** — capture is client-throttled but server should still cap per-IP
-- [ ] **Distributed rate limiter** (`@upstash/ratelimit`) when traffic outgrows the in-memory bucket
-- [ ] **Better error display** when provider API keys are missing — surface a real toast instead of silent failure
+- [ ] **Wire `usePullToRefresh` + `PullToRefreshIndicator`** into the empty state — pulls down to refresh the daily verse + kindness + suggested prompts.
+- [ ] **Wire `useLongPress` + `ContextMenu`** into `ChatMessage` — long-press / right-click to expose Copy / Save / Share / Quote.
+- [ ] **Memory management UI** — surface saved memories in a Settings sub-panel so users can review / delete / clear-all (`removeMemory(id)`, `clearMemories()` already exposed via the hook).
+- [ ] **Voice interruption** — let the user cut off jAIsus mid-sentence by holding the mic.
+- [ ] **Push notifications** for daily verse / kindness / streak reminders (opt-in). Service worker registration is already in place; needs the push subscription flow + a server endpoint.
+- [ ] **Rate limit on `/api/vision`** — capture is client-throttled but server should still cap per-IP.
+- [ ] **Distributed rate limiter** (`@upstash/ratelimit`) when traffic outgrows the in-memory bucket.
+- [ ] **Better error display** when provider API keys are missing — surface a real toast instead of silent failure.
 
 ### Ideas / Backlog
-- [ ] **FavoritesPanel sharing-export** — export all favorites as a markdown file, share-sheet integration
 - [ ] **Community features** (prayer wall, shared experiences)
 - [ ] **More video clips** for richer emotion mapping (currently 7 files mapped across 9 emotions)
 - [ ] **Voice cloning** for personality-specific voices (e.g. real Trump voice for Trump Jesus)
-- [ ] **User accounts / cloud persistence** (favorites + history + prayers sync across devices)
+- [ ] **User accounts / cloud persistence** (favorites + history + memories + streaks + prayers sync across devices)
 - [ ] **Multi-language support** — verses, kindness acts, prompts, greetings all translatable
-- [ ] **Conversation export** — markdown / audio mix
+- [ ] **Streak rewards / milestones** — unlock a new personality skin / voice / parable collection at 7/30/100 days
+- [ ] **Mood-driven home screen** — when MoodSelector is picked, show the curated bundle directly in the empty state rather than jumping into chat
 - [ ] **More personalities** — Lawyer Jesus (legal advice), Engineer Jesus (debugger of souls), Toddler Jesus
 
 ---
@@ -524,6 +626,34 @@ The Mac user is `resorb` and the repo lives at:
 4. Last slide CTA "Start talking" or tap-outside or skip-link → `onComplete` → `markOnboardingSeen()` + close
 5. `track('onboarding.completed')` fires once
 
+### Conversation Memory Flow (NEW)
+1. User hits `Clear` in `SettingsPanel` → `handleClearHistory` in `ChatInterface`
+2. If `messages.length >= 2`, `summarizeAndSave(messages, personalityRef.current)` fires (async, no await — best-effort)
+3. Hook strips messages to `{role, text}`, skips trivial conversations (<2 messages or <100 chars), POSTs to `/api/summarize`
+4. `/api/summarize` rate-limits per IP (burst 20, 1/15s), truncates input from the front to 8000 chars, calls Claude Haiku with a 60-token cap and a tight system prompt
+5. Response `{summary}` → `addMemory({summary, personalityId, messageCount})` → localStorage write → `jaisus-memories-changed` event
+6. Any mounted `useConversationMemory` consumer (none yet, but the hook subscribes) re-reads via the event listener
+7. **NOT YET WIRED**: the transport body for `/api/chat` should include `memoriesAsContext()` and the route should inject it into the personality system prompt for cross-session continuity. Saved memories are currently inert.
+
+### Service Worker Flow (NEW)
+1. `layout.tsx` mounts `<ServiceWorkerRegistration />` in production only
+2. After `requestIdleCallback`, `navigator.serviceWorker.register('/sw.js', {scope: '/'})` runs
+3. SW `install`: precaches `/`, `/manifest.json`, the two hero videos. Individual 404s are tolerated.
+4. SW `activate`: deletes any old `jaisus-*` caches whose version differs from `CACHE_VERSION`, then `clients.claim()`
+5. `fetch` events:
+   - `/api/*` → pass through (network only)
+   - HTML navigation → network-first with 3s timeout, fall back to cache, fall back to inline offline HTML
+   - Static asset → cache-first with background revalidation (stale-while-revalidate)
+6. `VersionCheck` poll-on-focus runs independently — when a new buildId is detected, the page hard-reloads to `?_v=Date.now()`, and the SW pulls fresh HTML on the new navigation.
+
+### OG Image Flow (NEW)
+1. A social media crawler / chat preview fetches `/api/og?type=default` (or `?type=verse&text=…&ref=…`, etc.)
+2. Edge runtime invokes the GET handler; query params are sanitized and clamped
+3. Variant-specific `cardFrame(body)` builds a `ReactElement` tree via `React.createElement`
+4. `next/og`'s `ImageResponse` rasterizes Satori → 1200x630 PNG
+5. Response served with `Cache-Control: public, max-age=3600, s-maxage=86400, immutable`
+6. **NOT YET WIRED**: no `og:image` meta tag in `layout.tsx` points at this route yet — crawlers can't find it.
+
 ---
 
 ## Prompt Engineering Notes
@@ -571,6 +701,7 @@ In local dev, `BUILD_ID` is `'dev'` and `VersionCheck` short-circuits — no rel
 ## Recent Commit History (newest first)
 
 ```
+<pending tier-5 commit>  feat: streaks, moods, conversation memory, parable reader, exports, SW, OG images
 53ec164 feat: wire new UX into the app
 3231c99 feat: UX building blocks — error boundary, toasts, haptics, onboarding, favorites, daily verse, suggested prompts, analytics
 47e568f feat: massive content expansion — parables, personalities, teaching topics

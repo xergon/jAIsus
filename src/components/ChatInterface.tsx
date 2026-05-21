@@ -27,8 +27,11 @@ import { DailyKindness } from './DailyKindness';
 import { GreetingHeader } from './GreetingHeader';
 import { FavoritesPanel } from './FavoritesPanel';
 import { PersonalitySwitcher } from './PersonalitySwitcher';
+import { StreakBadge } from './StreakBadge';
+import { MoodSelector } from './MoodSelector';
 import { hasSeenOnboarding, markOnboardingSeen } from '@/lib/onboarding';
 import { track } from '@/lib/analytics';
+import { useConversationMemory } from '@/hooks/useConversationMemory';
 
 export function ChatInterface() {
   const [input, setInput] = useState('');
@@ -49,6 +52,7 @@ export function ChatInterface() {
   const sendMessageRef = useRef<any>(null);
 
   const { loadMessages, saveMessages, clearHistory } = useChatHistory();
+  const { summarizeAndSave } = useConversationMemory();
   const { voiceState, startListening, startProcessing, startSpeaking, reset } = useVoiceState();
   const { speak, queueSentence, stop: stopSpeaking, isSpeaking } = useSpeechSynthesis();
   const spokenLengthRef = useRef(0);
@@ -355,6 +359,12 @@ export function ChatInterface() {
   }
 
   function handleClearHistory() {
+    // Before wiping, save a one-sentence summary of the conversation so jAIsus
+    // can carry a thread of memory into the next session. Best-effort, async,
+    // doesn't block clearing.
+    if (messages.length >= 2) {
+      summarizeAndSave(messages, personalityRef.current).catch(() => { /* silent */ });
+    }
     clearHistory();
     setMessages([]);
   }
@@ -575,12 +585,23 @@ export function ChatInterface() {
               )}
               {messages.length === 0 && mounted && !voiceError && (
                 <div className="space-y-4 py-2 animate-fade-in">
+                  <div className="flex justify-center">
+                    <StreakBadge />
+                  </div>
                   <GreetingHeader />
                   <DailyVerse />
                   <DailyKindness />
                   <SuggestedPrompts
                     onPick={(text) => {
                       track('suggestion.picked');
+                      sendMessage({ text });
+                    }}
+                  />
+                  <MoodSelector
+                    onPick={(mood, content) => {
+                      track('mood.picked', { mood: mood.id });
+                      // Compose a natural opener combining the mood label and a starter prompt
+                      const text = content.promptText ?? `I'm feeling ${mood.label.toLowerCase()}.`;
                       sendMessage({ text });
                     }}
                   />

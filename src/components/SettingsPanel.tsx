@@ -6,6 +6,7 @@ import { setStoredVoiceId } from '@/hooks/useSpeechSynthesis';
 import { PERSONALITIES } from '@/lib/personalities';
 import { useModalA11y } from '@/hooks/useModalA11y';
 import { toast } from '@/lib/toast';
+import { ExportButton } from './ExportButton';
 
 const VISION_INTERVAL_OPTIONS = [
   { value: 15, label: '15s' },
@@ -225,6 +226,15 @@ export function SettingsPanel({
                 {testing ? '...' : 'Test'}
               </button>
             </div>
+          </div>
+
+          {/* Export your data */}
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-stone-800">Export your data</p>
+              <p className="text-xs text-stone-500">Download chats and favorites as Markdown, JSON, or plain text</p>
+            </div>
+            <ExportButton />
           </div>
 
           {/* Clear chat history */}

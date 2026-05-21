@@ -5,6 +5,7 @@ import { VersionCheck } from "@/components/VersionCheck";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ToastProvider } from "@/components/Toast";
 import { AnalyticsInit } from "@/components/AnalyticsInit";
+import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
 
 // Build ID baked in at build time. Compared against /api/version at runtime to
 // detect when a new deploy is live and force-reload stale iOS PWAs.
@@ -65,6 +66,7 @@ export default function RootLayout({
             the app tree doesn't also kill the auto-reload-on-new-deploy path. */}
         <VersionCheck buildId={BUILD_ID} />
         <AnalyticsInit />
+        <ServiceWorkerRegistration />
         <ToastProvider />
         <ErrorBoundary>{children}</ErrorBoundary>
       </body>
