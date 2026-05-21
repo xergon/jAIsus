@@ -36,6 +36,8 @@ import { hasSeenOnboarding, markOnboardingSeen } from '@/lib/onboarding';
 import { track } from '@/lib/analytics';
 import { useConversationMemory } from '@/hooks/useConversationMemory';
 import { memoriesAsContext } from '@/lib/conversation-memory';
+import { getCustomPersonality, isCustomId } from '@/lib/custom-personalities';
+import { PersonalityCreator } from './PersonalityCreator';
 import { useVoiceActivityDetection } from '@/hooks/useVoiceActivityDetection';
 import { VADConsentPrompt, getVADConsent, setVADConsent, type VADConsent } from './VADConsentPrompt';
 import { NotificationOptInPrompt, hasSeenNotificationPrompt } from './NotificationOptInPrompt';
@@ -122,10 +124,20 @@ export function ChatInterface() {
       // Always include the latest scene if camera is active — the AI needs
       // the most current view even if the capture is a few seconds old.
       // Only omit if there's genuinely no scene at all.
+      // If the active personality is a user-authored custom one, also include
+      // the full definition inline. The server can't reach into the client's
+      // localStorage to look it up by id alone — so we send it on every
+      // request when relevant. Server-side validation enforces the same
+      // length caps and locks provider to 'claude'.
+      let customPersonality: ReturnType<typeof getCustomPersonality> | undefined;
+      if (isCustomId(personalityRef.current)) {
+        customPersonality = getCustomPersonality(personalityRef.current) ?? undefined;
+      }
       return {
         personalityId: personalityRef.current,
         ...(scene ? { sceneDescription: scene } : {}),
         ...(memoryContext ? { memoryContext } : {}),
+        ...(customPersonality ? { customPersonality } : {}),
       };
     },
   }), []);
@@ -583,13 +595,25 @@ export function ChatInterface() {
         <HeroSection voiceState={voiceState} interimTranscript={interimTranscript} emotion={currentEmotion} />
 
         {/* Fast personality switcher — lives just below the hero so the user
-            can taste-test different vibes without opening Settings. */}
+            can taste-test different vibes without opening Settings. The "+"
+            chip on the right opens the PersonalityCreator. */}
         {mounted && (
-          <div className="px-4 pt-2">
-            <PersonalitySwitcher
-              activeId={personalityId}
-              onChange={handlePersonalityChange}
-            />
+          <div className="px-4 pt-2 flex items-center gap-2">
+            <div className="flex-1 min-w-0">
+              <PersonalitySwitcher
+                activeId={personalityId}
+                onChange={handlePersonalityChange}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setActivePanel('personality-creator')}
+              className="shrink-0 w-10 h-10 rounded-full bg-white border border-stone-200 text-stone-600 text-xl leading-none flex items-center justify-center hover:border-amber-300 active:scale-95"
+              aria-label="Create custom personality"
+              title="Create your own jAIsus"
+            >
+              +
+            </button>
           </div>
         )}
 
@@ -897,6 +921,16 @@ export function ChatInterface() {
         isOpen={activePanel === 'search'}
         onClose={() => setActivePanel('none')}
         onAskAbout={(text) => sendMessage({ text })}
+      />
+
+      {/* User-authored personality designer. On save, auto-switches to the
+          new personality so the user can immediately try it. */}
+      <PersonalityCreator
+        isOpen={activePanel === 'personality-creator'}
+        onClose={() => setActivePanel('none')}
+        onSaved={(p) => {
+          handlePersonalityChange(p.id);
+        }}
       />
 
       {/* VAD consent — fired once per session when voiceState first hits

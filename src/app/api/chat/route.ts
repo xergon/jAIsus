@@ -36,6 +36,7 @@ export async function POST(req: Request) {
     sceneDescription?: unknown;
     personalityId?: unknown;
     memoryContext?: unknown;
+    customPersonality?: unknown; // Optional inline payload for user-authored personalities
   };
   try {
     body = await req.json();
@@ -72,7 +73,41 @@ export async function POST(req: Request) {
     ? memoryContext.slice(0, 4000)
     : '';
 
-  const personality = getPersonality(personalityId || DEFAULT_PERSONALITY_ID);
+  // Resolve personality. Built-ins live server-side; user-authored "custom"
+  // personalities live in the client's localStorage, so the client also
+  // sends them inline via `customPersonality` for ids starting with 'custom-'.
+  // We validate the inline payload defensively so a malicious client can't
+  // bypass the shared rules or run with an unbounded prompt.
+  const MAX_INLINE_PROMPT = 2000;
+  let personality = getPersonality(personalityId || DEFAULT_PERSONALITY_ID);
+  if (personalityId && personalityId.startsWith('custom-')) {
+    const cp = body.customPersonality;
+    if (cp && typeof cp === 'object') {
+      const c = cp as Record<string, unknown>;
+      if (
+        typeof c.id === 'string' && c.id === personalityId &&
+        typeof c.name === 'string' &&
+        typeof c.systemPrompt === 'string' && c.systemPrompt.length >= 40 &&
+        typeof c.voiceId === 'string'
+      ) {
+        // Inline custom personality — clamp prompt length, lock provider to claude.
+        personality = {
+          id: c.id,
+          name: String(c.name).slice(0, 80),
+          desc: typeof c.desc === 'string' ? c.desc.slice(0, 200) : '',
+          emoji: typeof c.emoji === 'string' ? c.emoji.slice(0, 8) : '✨',
+          voiceId: c.voiceId,
+          provider: 'claude',
+          systemPrompt: c.systemPrompt.slice(0, MAX_INLINE_PROMPT),
+          teachingPrompt: typeof c.teachingPrompt === 'string'
+            ? c.teachingPrompt.slice(0, MAX_INLINE_PROMPT)
+            : c.systemPrompt.slice(0, MAX_INLINE_PROMPT),
+        };
+      }
+      // If validation fails, fall through with the default Mushroom Guru —
+      // safer than rejecting the whole request.
+    }
+  }
   // Detect if this is an auto-vision ping (parenthetical message)
   const lastMsg = messages[messages.length - 1];
   const lastText = lastMsg?.parts

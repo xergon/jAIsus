@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useCallback, type KeyboardEvent } from 'react';
-import { PERSONALITIES } from '@/lib/personalities';
+import { useEffect, useRef, useCallback, useState, useMemo, type KeyboardEvent } from 'react';
+import { PERSONALITIES, type Personality } from '@/lib/personalities';
+import { listCustomPersonalities, CUSTOM_CHANGED_EVENT } from '@/lib/custom-personalities';
 import { useHaptics } from '@/hooks/useHaptics';
 
 interface PersonalitySwitcherProps {
@@ -33,13 +34,36 @@ export function PersonalitySwitcher({
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
-  // Keep the array sized to the personality list — refs are assigned via
-  // callback ref in the JSX below.
-  if (buttonRefs.current.length !== PERSONALITIES.length) {
-    buttonRefs.current = new Array(PERSONALITIES.length).fill(null);
+  // Hydrate user-authored custom personalities and keep them in sync via the
+  // shared CustomEvent + cross-tab `storage` event. Starts empty so SSR + the
+  // initial client render agree (built-ins only), then expands on mount.
+  const [customList, setCustomList] = useState<Personality[]>([]);
+  useEffect(() => {
+    const refresh = () => setCustomList(listCustomPersonalities());
+    refresh();
+    if (typeof window === 'undefined') return;
+    window.addEventListener(CUSTOM_CHANGED_EVENT, refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener(CUSTOM_CHANGED_EVENT, refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, []);
+
+  // Built-ins first, custom after — keeps the familiar order stable and lets
+  // users browse left-to-right from kindest to edgiest, then "yours".
+  const allPersonalities = useMemo(
+    () => [...PERSONALITIES, ...customList],
+    [customList]
+  );
+
+  // Keep the array sized to the merged list — refs are assigned via callback
+  // ref in the JSX below.
+  if (buttonRefs.current.length !== allPersonalities.length) {
+    buttonRefs.current = new Array(allPersonalities.length).fill(null);
   }
 
-  const activeIndex = PERSONALITIES.findIndex(p => p.id === activeId);
+  const activeIndex = allPersonalities.findIndex(p => p.id === activeId);
 
   // When activeId changes (including from external sources like Settings),
   // bring the active chip into view. Use `nearest` block to avoid vertical
@@ -57,13 +81,13 @@ export function PersonalitySwitcher({
 
   const selectByIndex = useCallback(
     (index: number) => {
-      const target = PERSONALITIES[index];
+      const target = allPersonalities[index];
       if (!target) return;
       if (target.id === activeId) return; // no-op on already-active
       vibrate('tap');
       onChange(target.id);
     },
-    [activeId, onChange, vibrate]
+    [activeId, onChange, vibrate, allPersonalities]
   );
 
   const handleKeyDown = useCallback(
@@ -72,7 +96,7 @@ export function PersonalitySwitcher({
         case 'ArrowRight':
         case 'ArrowDown': {
           e.preventDefault();
-          const next = (index + 1) % PERSONALITIES.length;
+          const next = (index + 1) % allPersonalities.length;
           buttonRefs.current[next]?.focus();
           selectByIndex(next);
           break;
@@ -81,7 +105,7 @@ export function PersonalitySwitcher({
         case 'ArrowUp': {
           e.preventDefault();
           const prev =
-            (index - 1 + PERSONALITIES.length) % PERSONALITIES.length;
+            (index - 1 + allPersonalities.length) % allPersonalities.length;
           buttonRefs.current[prev]?.focus();
           selectByIndex(prev);
           break;
@@ -100,7 +124,7 @@ export function PersonalitySwitcher({
         }
         case 'End': {
           e.preventDefault();
-          const last = PERSONALITIES.length - 1;
+          const last = allPersonalities.length - 1;
           buttonRefs.current[last]?.focus();
           selectByIndex(last);
           break;
@@ -127,7 +151,7 @@ export function PersonalitySwitcher({
         .filter(Boolean)
         .join(' ')}
     >
-      {PERSONALITIES.map((p, i) => {
+      {allPersonalities.map((p, i) => {
         const isActive = p.id === activeId;
         return (
           <button

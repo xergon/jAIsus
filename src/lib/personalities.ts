@@ -412,7 +412,30 @@ export const PERSONALITIES: Personality[] = [
 export const DEFAULT_PERSONALITY_ID = 'mushroom-guru';
 
 export function getPersonality(id: string): Personality {
-  return PERSONALITIES.find(p => p.id === id) || MUSHROOM_GURU;
+  // Try built-ins first (fast path; runs on both server and client).
+  const builtin = PERSONALITIES.find(p => p.id === id);
+  if (builtin) return builtin;
+
+  // Custom personalities live in localStorage — only resolvable on the client.
+  // On the server (chat route), the client passes `personalityId`; if it's a
+  // custom id the server can't look it up here, so chat/route.ts now ALSO
+  // accepts a `customPersonality` field in the body for that case. This
+  // function still returns the safe fallback if nothing matches.
+  if (typeof window !== 'undefined' && id && id.startsWith('custom-')) {
+    try {
+      const raw = window.localStorage.getItem('jaisus-custom-personalities');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const custom = parsed.find((p) => p && p.id === id);
+          if (custom && custom.systemPrompt) return custom as Personality;
+        }
+      }
+    } catch {
+      // fall through to default
+    }
+  }
+  return MUSHROOM_GURU;
 }
 
 export function getStoredPersonalityId(): string {
