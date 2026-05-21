@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { TEACHING_TOPICS } from '@/lib/constants';
+import { useModalA11y } from '@/hooks/useModalA11y';
 
 interface TeachingPlayerProps {
   isOpen: boolean;
@@ -15,6 +16,8 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
   const [teaching, setTeaching] = useState('');
   const [loading, setLoading] = useState(false);
   const [selectedTopic, setSelectedTopic] = useState('');
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalA11y({ isOpen, onClose, ref: dialogRef });
 
   async function generateTeaching(topic: string) {
     setSelectedTopic(topic);
@@ -27,8 +30,17 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic }),
       });
+      if (!res.ok) {
+        // Could be 429 (rate limit) or 400 (invalid topic) — surface generic message
+        setTeaching('Unable to generate teaching right now. Please try again in a moment.');
+        return;
+      }
       const data = await res.json();
-      setTeaching(data.teaching);
+      if (typeof data.teaching === 'string' && data.teaching.length > 0) {
+        setTeaching(data.teaching);
+      } else {
+        setTeaching('Unable to generate teaching at this time. Please try again.');
+      }
     } catch {
       setTeaching('Unable to generate teaching at this time. Please try again.');
     } finally {
@@ -40,14 +52,20 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative w-full max-w-md max-h-[85vh] bg-white rounded-t-2xl shadow-2xl flex flex-col animate-slide-up">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="teaching-title"
+        className="relative w-full max-w-md max-h-[85vh] bg-white rounded-t-2xl shadow-2xl flex flex-col animate-slide-up"
+      >
         <div className="flex justify-center pt-3 pb-2">
-          <div className="w-10 h-1 rounded-full bg-stone-300" />
+          <div className="w-10 h-1 rounded-full bg-stone-300" aria-hidden="true" />
         </div>
 
         <div className="px-5 pb-2">
-          <h2 className="text-lg font-bold text-stone-800">Dynamic Teachings</h2>
+          <h2 id="teaching-title" className="text-lg font-bold text-stone-800">Dynamic Teachings</h2>
           <p className="text-sm text-stone-500">Choose a topic to hear a teaching</p>
         </div>
 

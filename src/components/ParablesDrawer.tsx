@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { parables } from '@/lib/parables';
+import { useModalA11y } from '@/hooks/useModalA11y';
 
 interface ParablesDrawerProps {
   isOpen: boolean;
@@ -12,6 +13,8 @@ interface ParablesDrawerProps {
 export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerProps) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalA11y({ isOpen, onClose, ref: dialogRef });
 
   const filtered = parables.filter(p =>
     p.title.toLowerCase().includes(search.toLowerCase()) ||
@@ -30,10 +33,15 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
           isOpen ? 'opacity-100' : 'opacity-0'
         }`}
         onClick={onClose}
+        aria-hidden="true"
       />
 
       {/* Drawer */}
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="parables-title"
         className={`absolute bottom-0 left-0 right-0 max-h-[80vh] bg-white rounded-t-2xl shadow-2xl
           transition-transform duration-300 ease-out ${
           isOpen ? 'translate-y-0' : 'translate-y-full'
@@ -41,12 +49,14 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
       >
         {/* Handle */}
         <div className="flex justify-center pt-3 pb-2">
-          <div className="w-10 h-1 rounded-full bg-stone-300" />
+          <div className="w-10 h-1 rounded-full bg-stone-300" aria-hidden="true" />
         </div>
 
         <div className="px-4 pb-2">
-          <h2 className="text-lg font-bold text-stone-800">Explore Parables</h2>
+          <h2 id="parables-title" className="text-lg font-bold text-stone-800">Explore Parables</h2>
+          <label htmlFor="parables-search" className="sr-only">Search parables</label>
           <input
+            id="parables-search"
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}

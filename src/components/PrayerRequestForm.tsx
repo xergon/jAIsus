@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { useModalA11y } from '@/hooks/useModalA11y';
 
 interface PrayerRequestFormProps {
   isOpen: boolean;
@@ -10,19 +11,47 @@ interface PrayerRequestFormProps {
 export function PrayerRequestForm({ isOpen, onClose }: PrayerRequestFormProps) {
   const [text, setText] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useModalA11y({ isOpen, onClose, ref: dialogRef });
+
+  // Cleanup the close-timeout on unmount or if the modal closes early
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current);
+    };
+  }, []);
+
+  // Reset submitted state when modal is closed and reopened
+  useEffect(() => {
+    if (!isOpen) {
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+        closeTimeoutRef.current = null;
+      }
+      setSubmitted(false);
+    }
+  }, [isOpen]);
 
   function handleSubmit() {
     if (!text.trim()) return;
 
-    const prayers = JSON.parse(localStorage.getItem('jaisus-prayers') || '[]');
-    prayers.push({ id: Date.now().toString(), text: text.trim(), timestamp: Date.now() });
-    localStorage.setItem('jaisus-prayers', JSON.stringify(prayers));
+    try {
+      const prayers = JSON.parse(localStorage.getItem('jaisus-prayers') || '[]');
+      prayers.push({ id: Date.now().toString(), text: text.trim(), timestamp: Date.now() });
+      localStorage.setItem('jaisus-prayers', JSON.stringify(prayers));
+    } catch (err) {
+      console.warn('Failed to persist prayer:', err);
+      // Still show success — the request was received emotionally even if storage failed
+    }
 
     setSubmitted(true);
     setText('');
-    setTimeout(() => {
+    closeTimeoutRef.current = setTimeout(() => {
       setSubmitted(false);
       onClose();
+      closeTimeoutRef.current = null;
     }, 2500);
   }
 
@@ -30,28 +59,36 @@ export function PrayerRequestForm({ isOpen, onClose }: PrayerRequestFormProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative w-full max-w-md bg-white rounded-t-2xl shadow-2xl p-5 animate-slide-up">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="prayer-title"
+        className="relative w-full max-w-md bg-white rounded-t-2xl shadow-2xl p-5 animate-slide-up"
+      >
         <div className="flex justify-center mb-3">
-          <div className="w-10 h-1 rounded-full bg-stone-300" />
+          <div className="w-10 h-1 rounded-full bg-stone-300" aria-hidden="true" />
         </div>
 
         {submitted ? (
-          <div className="text-center py-8 animate-fade-in">
-            <div className="text-5xl mb-3">🙏</div>
-            <h3 className="text-lg font-bold text-stone-800">Your Prayer Has Been Received</h3>
+          <div className="text-center py-8 animate-fade-in" role="status">
+            <div className="text-5xl mb-3" aria-hidden="true">🙏</div>
+            <h3 id="prayer-title" className="text-lg font-bold text-stone-800">Your Prayer Has Been Received</h3>
             <p className="text-sm text-stone-500 mt-2">
               May you find peace and comfort in this moment.
             </p>
           </div>
         ) : (
           <>
-            <h2 className="text-lg font-bold text-stone-800 text-center">Request Prayer</h2>
+            <h2 id="prayer-title" className="text-lg font-bold text-stone-800 text-center">Request Prayer</h2>
             <p className="text-sm text-stone-500 text-center mt-1">
               Share what&apos;s on your heart
             </p>
 
+            <label htmlFor="prayer-text" className="sr-only">Your prayer request</label>
             <textarea
+              id="prayer-text"
               value={text}
               onChange={e => setText(e.target.value)}
               placeholder="Write your prayer request here..."

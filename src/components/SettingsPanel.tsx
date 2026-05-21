@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { VOICE_OPTIONS, DEFAULT_VOICE_ID } from '@/lib/constants';
 import { setStoredVoiceId } from '@/hooks/useSpeechSynthesis';
 import { PERSONALITIES } from '@/lib/personalities';
+import { useModalA11y } from '@/hooks/useModalA11y';
 
 const VISION_INTERVAL_OPTIONS = [
   { value: 15, label: '15s' },
@@ -53,6 +54,18 @@ export function SettingsPanel({
   const [cleared, setCleared] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState(DEFAULT_VOICE_ID);
   const [testing, setTesting] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const testTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useModalA11y({ isOpen, onClose, ref: dialogRef });
+
+  // Cleanup pending timeouts on unmount or close to prevent state updates after dismount
+  useEffect(() => {
+    return () => {
+      if (testTimeoutRef.current) clearTimeout(testTimeoutRef.current);
+      if (clearedTimeoutRef.current) clearTimeout(clearedTimeoutRef.current);
+    };
+  }, []);
 
   // Load saved voice on mount
   useEffect(() => {
@@ -75,26 +88,34 @@ export function SettingsPanel({
     if (onTestVoice) {
       onTestVoice(selectedVoice);
     }
-    setTimeout(() => setTesting(false), 3000);
+    if (testTimeoutRef.current) clearTimeout(testTimeoutRef.current);
+    testTimeoutRef.current = setTimeout(() => setTesting(false), 3000);
   }
 
   function handleClear() {
     onClearHistory();
     setCleared(true);
-    setTimeout(() => setCleared(false), 2000);
+    if (clearedTimeoutRef.current) clearTimeout(clearedTimeoutRef.current);
+    clearedTimeoutRef.current = setTimeout(() => setCleared(false), 2000);
   }
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative w-full max-w-md bg-white rounded-t-2xl shadow-2xl p-5 animate-slide-up">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        className="relative w-full max-w-md bg-white rounded-t-2xl shadow-2xl p-5 animate-slide-up"
+      >
         <div className="flex justify-center mb-3">
-          <div className="w-10 h-1 rounded-full bg-stone-300" />
+          <div className="w-10 h-1 rounded-full bg-stone-300" aria-hidden="true" />
         </div>
 
-        <h2 className="text-lg font-bold text-stone-800">Settings</h2>
+        <h2 id="settings-title" className="text-lg font-bold text-stone-800">Settings</h2>
 
         <div className="mt-4 space-y-4">
           {/* Personality selector */}
