@@ -2,7 +2,7 @@ import { convertToModelMessages, streamText, UIMessage, ModelMessage } from 'ai'
 import { anthropic } from '@ai-sdk/anthropic';
 import { xai } from '@ai-sdk/xai';
 import { deepseek } from '@ai-sdk/deepseek';
-import { getPersonality, DEFAULT_PERSONALITY_ID } from '@/lib/personalities';
+import { getPersonality, DEFAULT_PERSONALITY_ID, SHARED_RULES } from '@/lib/personalities';
 import { clientKey, rateLimit, rateLimitResponse } from '@/lib/rate-limit';
 
 export const maxDuration = 30;
@@ -82,31 +82,43 @@ export async function POST(req: Request) {
   let personality = getPersonality(personalityId || DEFAULT_PERSONALITY_ID);
   if (personalityId && personalityId.startsWith('custom-')) {
     const cp = body.customPersonality;
-    if (cp && typeof cp === 'object') {
-      const c = cp as Record<string, unknown>;
-      if (
-        typeof c.id === 'string' && c.id === personalityId &&
-        typeof c.name === 'string' &&
-        typeof c.systemPrompt === 'string' && c.systemPrompt.length >= 40 &&
-        typeof c.voiceId === 'string'
-      ) {
-        // Inline custom personality — clamp prompt length, lock provider to claude.
-        personality = {
-          id: c.id,
-          name: String(c.name).slice(0, 80),
-          desc: typeof c.desc === 'string' ? c.desc.slice(0, 200) : '',
-          emoji: typeof c.emoji === 'string' ? c.emoji.slice(0, 8) : '✨',
-          voiceId: c.voiceId,
-          provider: 'claude',
-          systemPrompt: c.systemPrompt.slice(0, MAX_INLINE_PROMPT),
-          teachingPrompt: typeof c.teachingPrompt === 'string'
-            ? c.teachingPrompt.slice(0, MAX_INLINE_PROMPT)
-            : c.systemPrompt.slice(0, MAX_INLINE_PROMPT),
-        };
-      }
-      // If validation fails, fall through with the default Mushroom Guru —
-      // safer than rejecting the whole request.
+    const c = (cp && typeof cp === 'object') ? cp as Record<string, unknown> : null;
+    const valid =
+      !!c &&
+      typeof c.id === 'string' && c.id === personalityId &&
+      typeof c.name === 'string' && c.name.length > 0 &&
+      typeof c.systemPrompt === 'string' && c.systemPrompt.length >= 40 &&
+      typeof c.voiceId === 'string' && c.voiceId.length > 0;
+
+    if (!valid) {
+      // Return 400 instead of silent fallback so the client knows its payload
+      // was malformed and so we don't masquerade as a built-in personality
+      // without the user knowing. Logged for debuggability.
+      console.warn('[chat] custom personalityId without valid inline payload', personalityId);
+      return Response.json(
+        { error: 'Custom personality payload missing or invalid' },
+        { status: 400 }
+      );
     }
+
+    // SECURITY: Inline custom personality — clamp prompt length, lock
+    // provider to 'claude', and ALWAYS append SHARED_RULES so user-authored
+    // prompts still respect the TTS guardrails (no stage directions, emotion
+    // tags). Without this, a custom prompt could produce "*smiles* Hello"
+    // which the TTS engine would read literally.
+    const userPrompt = (c.systemPrompt as string).slice(0, MAX_INLINE_PROMPT);
+    personality = {
+      id: c.id as string,
+      name: String(c.name).slice(0, 80),
+      desc: typeof c.desc === 'string' ? c.desc.slice(0, 200) : '',
+      emoji: typeof c.emoji === 'string' ? c.emoji.slice(0, 8) : '✨',
+      voiceId: c.voiceId as string,
+      provider: 'claude',
+      systemPrompt: userPrompt + SHARED_RULES,
+      teachingPrompt: (typeof c.teachingPrompt === 'string'
+        ? c.teachingPrompt.slice(0, MAX_INLINE_PROMPT)
+        : userPrompt) + SHARED_RULES,
+    };
   }
   // Detect if this is an auto-vision ping (parenthetical message)
   const lastMsg = messages[messages.length - 1];

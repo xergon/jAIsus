@@ -18,7 +18,7 @@ import { ParablesDrawer } from './ParablesDrawer';
 import { PrayerRequestForm } from './PrayerRequestForm';
 import { TeachingPlayer } from './TeachingPlayer';
 import { SettingsPanel, getStoredVisionInterval } from './SettingsPanel';
-import { getPersonality, getStoredPersonalityId, setStoredPersonalityId } from '@/lib/personalities';
+import { getPersonality, getStoredPersonalityId, setStoredPersonalityId, DEFAULT_PERSONALITY_ID } from '@/lib/personalities';
 import { CommunityPlaceholder } from './CommunityPlaceholder';
 import { OnboardingOverlay } from './OnboardingOverlay';
 import { SuggestedPrompts } from './SuggestedPrompts';
@@ -930,6 +930,15 @@ export function ChatInterface() {
         onClose={() => setActivePanel('none')}
         onSaved={(p) => {
           handlePersonalityChange(p.id);
+        }}
+        onDeleted={(deletedId) => {
+          // If the deleted personality was the active one, snap back to the
+          // default so the transport doesn't keep sending a stale id (which
+          // would silently fall back to Mushroom Guru server-side without
+          // any UI indication).
+          if (personalityRef.current === deletedId) {
+            handlePersonalityChange(DEFAULT_PERSONALITY_ID);
+          }
         }}
       />
 

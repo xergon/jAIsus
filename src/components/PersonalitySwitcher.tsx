@@ -57,13 +57,21 @@ export function PersonalitySwitcher({
     [customList]
   );
 
-  // Keep the array sized to the merged list — refs are assigned via callback
-  // ref in the JSX below.
-  if (buttonRefs.current.length !== allPersonalities.length) {
-    buttonRefs.current = new Array(allPersonalities.length).fill(null);
-  }
+  // Re-size the ref array in an effect, NOT during render. Mutating refs
+  // during render violates React 19's render-purity contract and concurrent
+  // rendering can drop refs assigned by callback refs in the same pass.
+  useEffect(() => {
+    if (buttonRefs.current.length !== allPersonalities.length) {
+      buttonRefs.current.length = allPersonalities.length;
+    }
+  }, [allPersonalities.length]);
 
   const activeIndex = allPersonalities.findIndex(p => p.id === activeId);
+  // During SSR/hydration the active id might be a custom one that hasn't
+  // hydrated yet — activeIndex would be -1 and EVERY chip would get
+  // tabIndex=-1, locking keyboard users out of the radiogroup. Fall back
+  // to the first chip in that transient window so the group stays usable.
+  const focusableIndex = activeIndex >= 0 ? activeIndex : 0;
 
   // When activeId changes (including from external sources like Settings),
   // bring the active chip into view. Use `nearest` block to avoid vertical
@@ -91,6 +99,9 @@ export function PersonalitySwitcher({
   );
 
   const handleKeyDown = useCallback(
+    // `allPersonalities` is intentionally a dep — when custom personalities
+    // are added/removed the wrap-around bounds must use the current length,
+    // not the stale closure length.
     (e: KeyboardEvent<HTMLButtonElement>, index: number) => {
       switch (e.key) {
         case 'ArrowRight':
@@ -133,7 +144,7 @@ export function PersonalitySwitcher({
           break;
       }
     },
-    [selectByIndex]
+    [selectByIndex, allPersonalities]
   );
 
   return (
@@ -164,7 +175,7 @@ export function PersonalitySwitcher({
             aria-checked={isActive}
             aria-pressed={isActive}
             aria-label={`${p.name} — ${p.desc}`}
-            tabIndex={isActive ? 0 : -1}
+            tabIndex={i === focusableIndex ? 0 : -1}
             onClick={() => selectByIndex(i)}
             onKeyDown={e => handleKeyDown(e, i)}
             className={[

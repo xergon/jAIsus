@@ -18,6 +18,9 @@ interface PersonalityCreatorProps {
   onClose: () => void;
   /** Called after a successful save so the parent can switch to the new personality. */
   onSaved?: (personality: CustomPersonality) => void;
+  /** Called when the user deletes a personality, so the parent can clear
+   *  any stale active state pointing at it. */
+  onDeleted?: (deletedId: string) => void;
 }
 
 const SUGGESTED_EMOJIS = ['✨', '🦋', '🌊', '🔥', '🌙', '🌿', '⚓', '🪐', '🎭', '🐉', '🦊', '🪨', '☄️', '🍀', '🕊️', '🌺'];
@@ -51,7 +54,7 @@ const STARTER_TEMPLATES = [
   },
 ];
 
-export function PersonalityCreator({ isOpen, onClose, onSaved }: PersonalityCreatorProps) {
+export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: PersonalityCreatorProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalA11y({ isOpen, onClose, ref: dialogRef });
 
@@ -118,6 +121,9 @@ export function PersonalityCreator({ isOpen, onClose, onSaved }: PersonalityCrea
     setDesc(t.desc);
     setEmoji(t.emoji);
     setSystemPrompt(t.systemPrompt);
+    // Reset voice to the safe default — otherwise the previous edit's
+    // voice carries over into what should feel like a fresh template start.
+    setVoiceId(DEFAULT_VOICE_ID);
   }
 
   function handleSave() {
@@ -152,6 +158,10 @@ export function PersonalityCreator({ isOpen, onClose, onSaved }: PersonalityCrea
     toast.success(`${p.name} removed`);
     track('personality.deleted');
     setList(listCustomPersonalities());
+    // Tell the parent so it can clear any stale active state pointing at
+    // this id (otherwise chat keeps sending a now-invalid personalityId
+    // and the server silently falls back to Mushroom Guru without UX feedback).
+    onDeleted?.(p.id);
   }
 
   if (!isOpen) return null;

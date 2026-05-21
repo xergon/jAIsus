@@ -11,7 +11,9 @@ export interface Personality {
 }
 
 // Shared rules appended to ALL personalities
-const SHARED_RULES = `
+// Exported so the chat route can append it to user-authored custom
+// personalities, which would otherwise bypass TTS guardrails + emotion tags.
+export const SHARED_RULES = `
 
 ABSOLUTE RULE — NO SCENE DESCRIPTIONS, NO STAGE DIRECTIONS, NO NARRATION:
 Your output goes DIRECTLY to a text-to-speech engine that reads every single word aloud. You are NOT writing a screenplay. You are NOT a narrator. You are a PERSON SPEAKING.
@@ -428,7 +430,33 @@ export function getPersonality(id: string): Personality {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
           const custom = parsed.find((p) => p && p.id === id);
-          if (custom && custom.systemPrompt) return custom as Personality;
+          // Defensive shape check + length clamps. localStorage is
+          // attacker-writable (e.g. via XSS) so we can't trust the values
+          // even though we wrote them ourselves. Caps mirror the chat
+          // route's MAX_INLINE_PROMPT.
+          if (
+            custom &&
+            typeof custom === 'object' &&
+            typeof custom.id === 'string' &&
+            typeof custom.name === 'string' && custom.name.length > 0 &&
+            typeof custom.emoji === 'string' && custom.emoji.length > 0 &&
+            typeof custom.voiceId === 'string' && custom.voiceId.length > 0 &&
+            typeof custom.systemPrompt === 'string' && custom.systemPrompt.length > 0
+          ) {
+            const MAX = 2000;
+            return {
+              id: custom.id,
+              name: String(custom.name).slice(0, 80),
+              desc: typeof custom.desc === 'string' ? custom.desc.slice(0, 200) : '',
+              emoji: String(custom.emoji).slice(0, 8),
+              voiceId: String(custom.voiceId),
+              provider: 'claude',
+              systemPrompt: String(custom.systemPrompt).slice(0, MAX),
+              teachingPrompt: typeof custom.teachingPrompt === 'string'
+                ? String(custom.teachingPrompt).slice(0, MAX)
+                : String(custom.systemPrompt).slice(0, MAX),
+            };
+          }
         }
       }
     } catch {
