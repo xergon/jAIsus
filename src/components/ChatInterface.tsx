@@ -36,6 +36,9 @@ import { hasSeenOnboarding, markOnboardingSeen } from '@/lib/onboarding';
 import { track } from '@/lib/analytics';
 import { useConversationMemory } from '@/hooks/useConversationMemory';
 import { memoriesAsContext } from '@/lib/conversation-memory';
+import { useVoiceActivityDetection } from '@/hooks/useVoiceActivityDetection';
+import { VADConsentPrompt, getVADConsent, setVADConsent, type VADConsent } from './VADConsentPrompt';
+import { NotificationOptInPrompt, hasSeenNotificationPrompt } from './NotificationOptInPrompt';
 
 export function ChatInterface() {
   const [input, setInput] = useState('');
@@ -52,6 +55,16 @@ export function ChatInterface() {
   // doesn't get hidden behind the keyboard. Skipped if visualViewport is
   // unsupported (older browsers — they get the original layout).
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  // VAD consent + visibility. `vadConsent` starts null on mount (we read the
+  // persisted value inside the didLoadRef effect below). `showVADPrompt`
+  // toggles the modal; we guard with `vadPromptShownRef` so the prompt only
+  // surfaces once per session even if the user re-enters speaking state.
+  const [vadConsent, setVadConsent] = useState<VADConsent | null>(null);
+  const [showVADPrompt, setShowVADPrompt] = useState(false);
+  const vadPromptShownRef = useRef(false);
+  // Notification opt-in modal — gated behind a few conditions checked in the
+  // effect below (enough messages, no other modal open, not previously seen).
+  const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const personalityRef = useRef('mushroom-guru');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef<string>('ready');
@@ -226,6 +239,10 @@ export function ChatInterface() {
     if (!hasSeenOnboarding()) {
       setShowOnboarding(true);
     }
+    // Read persisted VAD consent (null = never decided). The prompt itself
+    // is gated by a separate effect that fires when voiceState first hits
+    // 'speaking', so we just need the value in state here.
+    setVadConsent(getVADConsent());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -333,6 +350,44 @@ export function ChatInterface() {
       reset();
     }
   }, [isSpeaking, voiceState, reset]);
+
+  // First time we hit speaking state in a session, and consent hasn't been
+  // decided yet, surface the one-time consent prompt. The ref guard ensures
+  // it only shows once per page-load even if the user toggles in/out of
+  // speaking state multiple times. We also avoid stacking on top of
+  // onboarding (looks awful, the user will dismiss without reading).
+  useEffect(() => {
+    if (vadConsent !== null) return;
+    if (vadPromptShownRef.current) return;
+    if (voiceState !== 'speaking') return;
+    if (showOnboarding) return;
+    vadPromptShownRef.current = true;
+    setShowVADPrompt(true);
+  }, [vadConsent, voiceState, showOnboarding]);
+
+  // VAD hook — fully dormant unless consent is granted AND jAIsus is
+  // currently speaking. When it detects sustained voice activity, it
+  // stops TTS and resets the voice state machine so the user can talk
+  // naturally without tapping anything. (Barge-in interrupt.)
+  useVoiceActivityDetection({
+    enabled: vadConsent === 'accepted' && voiceState === 'speaking',
+    onSpeechStart: () => {
+      stopSpeaking();
+      reset();
+    },
+  });
+
+  // Notification opt-in — surface once the user has clearly engaged with
+  // the app (>= 2 exchanges = 4 messages). Gated against stacking with
+  // onboarding or the VAD prompt so modals never pile up. We also check
+  // `hasSeenNotificationPrompt()` so a previous decision is honored.
+  useEffect(() => {
+    if (!mounted) return;
+    if (messages.length < 4) return;
+    if (showOnboarding || showVADPrompt) return;
+    if (hasSeenNotificationPrompt()) return;
+    setShowNotificationPrompt(true);
+  }, [messages.length, showOnboarding, showVADPrompt, mounted]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -743,6 +798,30 @@ export function ChatInterface() {
         isOpen={activePanel === 'search'}
         onClose={() => setActivePanel('none')}
         onAskAbout={(text) => sendMessage({ text })}
+      />
+
+      {/* VAD consent — fired once per session when voiceState first hits
+          'speaking' and consent is still null. Persists to localStorage. */}
+      <VADConsentPrompt
+        isOpen={showVADPrompt}
+        onAccept={() => {
+          setVADConsent('accepted');
+          setVadConsent('accepted');
+          setShowVADPrompt(false);
+        }}
+        onDecline={() => {
+          setVADConsent('declined');
+          setVadConsent('declined');
+          setShowVADPrompt(false);
+        }}
+      />
+
+      {/* Daily-verse push opt-in — surfaced after the user has had a couple
+          of exchanges. The prompt's own component records the seen-flag. */}
+      <NotificationOptInPrompt
+        isOpen={showNotificationPrompt}
+        onDeclined={() => setShowNotificationPrompt(false)}
+        onAccepted={() => setShowNotificationPrompt(false)}
       />
 
       {/* SpeakingHint lives at the root, outside the scrollable chat container,

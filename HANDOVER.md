@@ -1,6 +1,6 @@
 # jAIsus — Complete Handover Document
 
-**Last updated**: 2026-04-28
+**Last updated**: 2026-05-22
 **Repo**: github.com/xergon/jAIsus
 **Live**: https://jaisus.vercel.app
 **Deploy**: Auto-deploy from `main` via Vercel (GitHub integration)
@@ -191,7 +191,72 @@ The prompt-cache breakpoint sits BEFORE the memory message, so the cache prefix 
 
 ### NOT yet wired (intentionally — note as pending)
 - `usePullToRefresh` + `PullToRefreshIndicator` — still shipped, still unused. Empty-state integration is a small follow-up.
-- Notifications opt-in — not built yet; on the roadmap.
+- ~~Notifications opt-in — not built yet; on the roadmap.~~ (Landed in Wave 13/14 — see below.)
+
+---
+
+## Recent Additions — Wave 13 + 14 (Voice barge-in + push notifications + distributed rate limit + E2E scaffold)
+
+Wave 13 built four big features in parallel: voice activity detection for natural mid-speech interruption, the full Web Push stack for daily-verse notifications, an Upstash-backed distributed rate limiter, and a Playwright end-to-end test scaffold. Wave 14 was the wire-up pass that landed the consent prompts in `ChatInterface`, refreshed this doc, and did a final type/lint sweep. After this tier, jAIsus has a real notification channel, can be interrupted naturally while speaking, scales rate limits across instances, and has a CI-ready smoke-test net underneath the critical flows.
+
+### New hooks (`src/hooks/`)
+- **`useVoiceActivityDetection.ts`** — Web Audio API hook that listens for the user's voice while TTS plays back, fires `onSpeechStart` once sustained RMS > threshold for >150ms. Fully dormant when `enabled = false` (no `getUserMedia`, no `AudioContext`, no rAF loop, no permission prompt). When enabled, opens a `MediaStream` → `AnalyserNode` graph at `fftSize = 2048` and computes RMS on `getByteTimeDomainData` each frame. Edge detection uses two ref timestamps (`aboveSinceRef` / `belowSinceRef`) plus a `firedRef` so onSpeechStart fires exactly once per utterance — a sustained falling edge for `SILENCE_MS=400ms` resets the gate. Falling edge also calls optional `onSpeechEnd`. The analyser is NOT connected to `ctx.destination` — we never want mic-through-speakers (would also feed TTS back into VAD and create a runaway loop). A `cancelled` local + cleanup function handles the rapid enable/disable race: if `enabled` flips off while `getUserMedia` is still pending, the resolved stream's tracks are stopped immediately. Returns `{ isMonitoring, isSpeaking, error, isSupported }`.
+- **`usePushSubscription.ts`** — React wrapper over the `push-client` lib. On mount probes support + current permission + existing `PushSubscription` via `serviceWorker.ready`. Returns `{ isSupported, permission, subscription, error, subscribe, unsubscribe }`. `subscribe()` runs the full opt-in flow (permission → subscribe via PushManager → POST `/api/push/subscribe`) and returns the `SubscribeResult` so callers can branch (e.g. close a modal on success). State is locally updated on every operation so the UI re-renders without waiting for the next mount. Errors are surfaced via the `error` field — the lib never throws.
+
+### New components (`src/components/`)
+- **`VADConsentPrompt.tsx`** — one-time mic-listen consent modal. Pure presentational shell built on `useModalA11y` (focus trap, scroll lock, Escape, focus restore). Persists `'accepted'` or `'declined'` to the `jaisus-vad-consent` localStorage key. Exports a `getVADConsent()` reader (returns `'accepted' | 'declined' | null`) and a `setVADConsent(v)` writer alongside the component. ChatInterface gates the actual VAD hook on `getVADConsent() === 'accepted'` so a declined user never triggers `getUserMedia`. Modal copy explains exactly what the mic is used for (interrupt TTS, no recording, no audio leaves the device).
+- **`NotificationOptInPrompt.tsx`** — daily-verse push opt-in modal. Uses `usePushSubscription` internally to drive the accept path. Persists a `'1'` sentinel to `jaisus-notification-prompt-seen` localStorage on both Accept and Decline (we never re-prompt — the choice is final; user can re-enable from Settings later, on the roadmap). Exports `hasSeenNotificationPrompt()` and `markNotificationPromptSeen()` for the parent's gating logic. On Accept calls `subscribe()`, then `onAccepted?.()` if `result.ok`, else `onDeclined()` (we accept the failure as "they tried, don't keep nagging"). Uses `useModalA11y` for the same a11y guarantees as every other modal.
+
+### New libs (`src/lib/`)
+- **`push-keys.ts`** — exports `VAPID_PUBLIC_KEY` from `process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? ''`. Module is intentionally one line — keeps the env-var indirection in one place and lets the client and the cron handler import the same constant. Empty-string fallback so production builds without the var don't crash; instead `requestPermissionAndSubscribe()` errors out with a `'Push not configured'` message.
+- **`push-client.ts`** — client-side helpers: `isPushSupported()`, `getPermissionState()`, `getCurrentSubscription()`, `requestPermissionAndSubscribe()`, `unsubscribe()`, plus the `urlBase64ToUint8Array()` helper (spec-standard VAPID key decoding). All functions are safe to call during SSR (short-circuit when `typeof window === 'undefined'`). Never throws — every failure is communicated via the returned object (`{ ok: false, error }`). The subscribe flow reuses an existing `PushSubscription` if present rather than overwriting, so re-running the opt-in is idempotent.
+- **`push-server.ts`** — in-memory `Map<endpoint, PushSubscriptionJSON>` mirrored to `/tmp/jaisus-push.json` for warm-restart persistence. Exports `addSubscription(sub)`, `removeSubscription(endpoint)`, `listSubscriptions()`. The /tmp mirror gives best-effort persistence across function warm restarts but loses everything on cold start, diverges across regions, and races under burst subscribes. **TODO: migrate to Vercel KV / Upstash Redis / Postgres before scale.** Concurrency is left to Node's per-instance module loading (the Map is a singleton per instance); the disk writes are non-atomic but the next read just overwrites whatever's there. Adequate for an MVP with a handful of opted-in testers.
+- **`rate-limit.ts`** (UPDATED) — added `rateLimitAsync(key, config)` alongside the existing synchronous `rateLimit(key, config)`. When `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` are set, the async path uses an Upstash pipeline `[INCR, EXPIRE]` against a windowed key (`rl:<key>:<windowIndex>`) for distributed limiting. 1-second timeout via `AbortController` ensures a slow Upstash never blocks the real request. On any failure (env not set, timeout, non-2xx, malformed JSON, command-level error) falls back to the in-memory bucket — and emits a SINGLE `console.warn` the first time fallback is triggered (subsequent fallbacks stay quiet). Result shape is identical to `rateLimit()` so `rateLimitResponse(rl)` keeps working unchanged; migrating a route is just changing `const rl = rateLimit(...)` to `const rl = await rateLimitAsync(...)`.
+
+### New API routes (`src/app/api/`)
+- **`/api/push/subscribe`** — POST. Stores a `PushSubscriptionJSON` server-side. Validates the shape manually (no zod dep): `endpoint` must start with `https://`, `keys.p256dh` and `keys.auth` must be non-empty base64url-like strings. Rate-limited per-IP at 10/min (capacity 10, refill 10/60 per sec). Returns `{ ok: true }` on success, `{ error }` with 400 on bad shape, 429 on rate-limit, 401 if `CRON_SECRET` is misused (push-subscribe doesn't require it, but the parallel cron route does).
+- **`/api/push/unsubscribe`** — POST. Removes an endpoint from the store. Same 10/min rate limit. We deliberately do NOT authenticate the endpoint URL — the URL itself is the per-device secret, and the worst-case unauthorized call is the same outcome as the user clicking "Disable notifications" themselves (no harm beyond their own UX). No-op when the endpoint doesn't exist.
+- **`/api/push/send-daily`** — Vercel cron handler (GET, mirrored to POST for manual debugging). Authed via `Authorization: Bearer ${CRON_SECRET}` — Vercel injects this header automatically when `CRON_SECRET` is set in the project. Builds a VAPID JWT from scratch using Node's `crypto`: ECDSA over P-256 with SHA-256 (`ES256`), audience = push endpoint origin, expiration = now + 12h. Signing uses `dsaEncoding: 'ieee-p1363'` so the output is raw r||s (64 bytes) for JWS rather than the default ASN.1 DER. Payload is encrypted per RFC 8291 `aes128gcm`: ephemeral ECDH keypair per send, shared secret via `crypto.diffieHellman`, HKDF-derived CEK + nonce, plaintext padded with `0x02` delimiter (single-record), GCM-encrypted, body laid out as `salt(16) || rs(4) || idlen(1) || keyid(65) || ciphertext`. POSTs to each subscription with TTL=86400 (24h) and `Urgency: normal`. 201/202/200 → counted as sent. 404/410 → subscription is gone, removed from store. Other failures → counted as failed but left in place. Runs all sends in parallel via `Promise.all` and returns `{ sent, failed, removed }`. `maxDuration = 60` for headroom.
+
+### New config
+- **`vercel.json`** — declares the daily-verse cron at `0 9 * * *` UTC pointing at `/api/push/send-daily`. Single cron entry; no other Vercel-level config (build settings, routes, env are all set via the dashboard).
+
+### Service worker (`public/sw.js`) updates
+- **`push` event listener** — receives JSON payload (`{ title, body, url }`), falls back to a generic copy if missing/unparseable, and renders a notification with `tag: 'daily-verse'` so duplicate sends collapse into one notification.
+- **`notificationclick` listener** — on tap, focuses any open jAIsus tab (`clients.matchAll({ type: 'window', includeUncontrolled: true })`); if none open, calls `clients.openWindow(url)` where `url` came from the payload's `data` field. Notification is closed on click. Together this gives the user a single-tap path from notification → live app, regardless of whether they had it open.
+- `CACHE_VERSION` stays at `'v1'` (matches `SW_VERSION` in `src/lib/sw-config.ts`). The push/notificationclick additions do NOT change the caching strategy, so no version bump.
+
+### New testing scaffold
+- **`playwright.config.ts`** — single Mobile Chrome (Pixel 5) project. `webServer.command = "npm run dev"` boots the dev server automatically (reuses an existing one locally). HTML reporter; `screenshot: only-on-failure`, `video: retain-on-failure`, `trace: on-first-retry`. 30s per-test timeout, 5s expect timeout. Retries: 1 in CI, 0 locally (so flakes don't hide bugs during iteration). `fullyParallel: true` since each test gets fresh storage + mocks.
+- **`e2e/fixtures.ts`** — two auto-fixtures: `clearStorage` (init script that wipes localStorage on every nav, so each test starts from a clean slate) + `mockApis` (route handlers stubbing `/api/chat` with a single assistant text part `"Peace be with you, friend."`, `/api/tts` returning 500 to force Web Speech fallback, `/api/vision`, `/api/teachings`, `/api/summarize`, `/api/daily`). All mocks are intercepted with `page.route()` so the tests never hit Claude, ElevenLabs, Gemini, or any other paid service.
+- **`e2e/onboarding.spec.ts`** — verifies the first-run overlay appears on fresh storage, can be dismissed via the CTA, and that the flag persists across reloads.
+- **`e2e/chat.spec.ts`** — types a message, asserts the stubbed assistant reply appears, checks the message bubble layout.
+- **`e2e/favorites.spec.ts`** — taps the heart on an assistant bubble, opens the Saved drawer, asserts the favorite shows up; double-tap clear-all path.
+- **`e2e/parables.spec.ts`** — opens ParablesDrawer, picks a parable, asserts ParableReader content + close path.
+- **`e2e/settings-export.spec.ts`** — opens Settings, taps Export, picks a format, asserts the download fires.
+- **`e2e/README.md`** — run instructions (`npx playwright install chromium` once; then `npm run test:e2e` / `npm run test:e2e:ui`) and a mocks rundown.
+- **`package.json`** scripts: added `test:e2e` (`playwright test`) and `test:e2e:ui` (`playwright test --ui`). `@playwright/test` added as a devDependency.
+
+### Wiring (Wave 14)
+- **`ChatInterface.tsx`** imports `useVoiceActivityDetection`, `VADConsentPrompt`/`getVADConsent`/`setVADConsent`, and `NotificationOptInPrompt`/`hasSeenNotificationPrompt`. State added: `vadConsent`, `showVADPrompt` (gated by a `vadPromptShownRef` so it only shows once per session even if the user toggles voice multiple times), `showNotificationPrompt`. The `didLoadRef` mount block now reads `getVADConsent()` into state so the hook can decide whether to engage. A new effect surfaces `<VADConsentPrompt>` the first time `voiceState === 'speaking'` AND consent is still null AND `!showOnboarding` (no modal stacking). The VAD hook is mounted with `enabled: vadConsent === 'accepted' && voiceState === 'speaking'` — dormant otherwise. `onSpeechStart` calls `stopSpeaking()` + `reset()` for natural mid-speech barge-in interrupt. A separate effect surfaces `<NotificationOptInPrompt>` once `messages.length >= 4` (2+ exchanges) AND `!showOnboarding && !showVADPrompt` AND `!hasSeenNotificationPrompt()`. Both new prompts mount alongside the existing FavoritesPanel/MemoriesPanel/SearchPanel/OnboardingOverlay block.
+
+### New env vars users need to set on Vercel
+| Variable | Type | Purpose |
+|----------|------|---------|
+| `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | client-readable | The base64url-encoded P-256 public key the browser sends to its push service so it can match against our signed VAPID JWT. |
+| `VAPID_PRIVATE_KEY` | server only | base64url-encoded 32-byte P-256 private scalar. Signs every push request's JWT. |
+| `VAPID_SUBJECT` | server only | `mailto:` or `https://` URL identifying the application server. Push services may use this to contact us about abuse. |
+| `CRON_SECRET` | server only | Any random string. Vercel cron injects it as `Authorization: Bearer ${CRON_SECRET}` so we can reject unauthenticated cron URLs. |
+| `UPSTASH_REDIS_REST_URL` | server only (optional) | Upstash REST endpoint. When set together with the token, enables distributed rate limiting via `rateLimitAsync`. |
+| `UPSTASH_REDIS_REST_TOKEN` | server only (optional) | Upstash REST bearer token. Pairs with the URL above. |
+
+Generate the VAPID keypair with `npx web-push generate-vapid-keys` (no dep install needed via `npx`). The public/private split: public goes to `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, private to `VAPID_PRIVATE_KEY`.
+
+### Server-side memory + push notifications + barge-in are now LIVE
+- **Barge-in**: with consent granted, the user can interrupt jAIsus mid-sentence by simply talking. No tap required. The VAD hook fires `stopSpeaking()` + `reset()` on sustained voice activity for >150ms above threshold.
+- **Daily verse push**: Vercel cron hits `/api/push/send-daily` at 09:00 UTC; native VAPID + aes128gcm fans out to every stored subscription; service worker `push` listener renders the notification; tap focuses or opens the app.
+- **Distributed rate limit**: when Upstash env vars are set, `rateLimitAsync` enforces per-IP windows across all Vercel instances. Existing in-memory `rateLimit` continues to work where it's already used (no forced migration).
+- **E2E smoke tests**: 13 tests cover onboarding, chat, favorites, parables, and settings/export. All paid endpoints are mocked. Run with `npm run test:e2e`.
 
 ---
 
@@ -271,8 +336,12 @@ src/
 │   ├── api/
 │   │   ├── chat/route.ts          # Multi-model chat with prompt caching + rate limit
 │   │   ├── daily/route.ts         # Daily verse + Haiku-generated reflection (24h cache)
-│   │   ├── og/route.ts            # NEW: dynamic OG PNG (next/og, edge runtime, 3 variants)
-│   │   ├── summarize/route.ts     # NEW: 1-sentence conversation summary (Claude Haiku, rate-limited)
+│   │   ├── og/route.ts            # Dynamic OG PNG (next/og, edge runtime, 3 variants)
+│   │   ├── push/
+│   │   │   ├── subscribe/route.ts    # NEW (Wave 13): stores PushSubscription, rate-limited 10/min/IP
+│   │   │   ├── unsubscribe/route.ts  # NEW (Wave 13): removes a subscription endpoint
+│   │   │   └── send-daily/route.ts   # NEW (Wave 13): Vercel cron — VAPID JWT + RFC 8291 fan-out
+│   │   ├── summarize/route.ts     # 1-sentence conversation summary (Claude Haiku, rate-limited)
 │   │   ├── teachings/route.ts     # Teaching generation (Haiku, topic allowlist, rate limit)
 │   │   ├── tts/route.ts           # ElevenLabs TTS wrapper (voiceId allowlist)
 │   │   ├── version/route.ts       # Returns deployed build ID for stale-build self-heal
@@ -297,8 +366,9 @@ src/
 │   ├── FavoritesPanel.tsx         # Slide-up sheet listing all favorites
 │   ├── GreetingHeader.tsx         # Time-aware greeting (local time → UTC SSR guarded)
 │   ├── HeroSection.tsx            # Jesus visual + voice visualizers
-│   ├── MemoriesPanel.tsx          # NEW (Wave 10): slide-up drawer for saved conversation memories
+│   ├── MemoriesPanel.tsx          # Slide-up drawer for saved conversation memories
 │   ├── MoodSelector.tsx           # 2x5 / 5x2 grid of 10 mood chips
+│   ├── NotificationOptInPrompt.tsx # NEW (Wave 13): daily-verse push opt-in modal
 │   ├── OnboardingOverlay.tsx      # 4-slide first-run tour
 │   ├── ParableReader.tsx          # Full-screen immersive reading mode + TTS + drop-cap typography
 │   ├── ParablesDrawer.tsx         # Parable browser (tap opens ParableReader instead of inline expand)
@@ -315,6 +385,7 @@ src/
 │   ├── SuggestedPrompts.tsx       # Daily rotating horizontal chip strip
 │   ├── TeachingPlayer.tsx         # Teaching generator + player (topic chips + TTS)
 │   ├── Toast.tsx                  # ToastProvider — top-center stack, max 3 visible
+│   ├── VADConsentPrompt.tsx       # NEW (Wave 13): one-time mic-listen consent modal
 │   ├── VersionCheck.tsx           # Polls /api/version on focus, hard-reloads on mismatch
 │   └── VoiceButton.tsx            # Mic button
 ├── hooks/
@@ -325,9 +396,11 @@ src/
 │   ├── useHaptics.ts              # 8 named patterns, prefers-reduced-motion, opt-out
 │   ├── useLongPress.ts            # NEW: touch-and-hold + right-click gesture (unwired — for future use)
 │   ├── useModalA11y.ts            # Focus trap + scroll lock + Escape + focus restore
-│   ├── usePullToRefresh.ts        # NEW: pull-to-refresh gesture (unwired — for future use)
+│   ├── usePullToRefresh.ts        # Pull-to-refresh gesture (unwired — for future use)
+│   ├── usePushSubscription.ts     # NEW (Wave 13): wraps push-client lib (permission/subscribe/unsubscribe)
 │   ├── useSpeechRecognition.ts    # STT — continuous mode, 2s silence timeout
 │   ├── useSpeechSynthesis.ts      # TTS with streaming queue, blob URL leak tracking
+│   ├── useVoiceActivityDetection.ts # NEW (Wave 13): dormant-by-default mic listener for barge-in
 │   └── useVoiceState.ts           # State machine (idle/listening/processing/speaking)
 └── lib/
     ├── analytics.ts               # Privacy-first event buffer (sendBeacon-batched)
@@ -343,8 +416,11 @@ src/
     ├── onboarding.ts              # First-run flag persistence
     ├── parables.ts                # 50 parables database
     ├── personalities.ts           # 9 personalities with prompts + provider
-    ├── rate-limit.ts              # Token-bucket per-IP
-    ├── search.ts                  # NEW (Wave 10): client-side search across chat + favorites + parables
+    ├── push-client.ts             # NEW (Wave 13): browser PushManager wrappers (subscribe/unsubscribe/permission)
+    ├── push-keys.ts               # NEW (Wave 13): exposes NEXT_PUBLIC_VAPID_PUBLIC_KEY
+    ├── push-server.ts             # NEW (Wave 13): in-memory Map + /tmp mirror — TODO Vercel KV before scale
+    ├── rate-limit.ts              # UPDATED (Wave 13): added rateLimitAsync (Upstash + in-memory fallback)
+    ├── search.ts                  # Client-side search across chat + favorites + parables
     ├── streaks.ts                 # Consecutive-day streak (local-time calendar, DST-safe)
     ├── suggested-prompts.ts       # 30 curated chips, daily round-robin
     ├── sw-config.ts               # SW_VERSION + SW_PATH constants
@@ -353,10 +429,22 @@ src/
     └── types.ts                   # ActivePanel (incl. memories/search), VoiceState, Parable, PrayerRequest
 
 public/
-├── sw.js                          # NEW: service worker (network-first HTML, cache-first static, /api/* pass-through)
+├── sw.js                          # Service worker — push + notificationclick added in Wave 13
 ├── manifest.json                  # PWA manifest
 ├── icon-{192,512}.png
 └── (video + image assets…)
+
+e2e/                               # NEW (Wave 13): Playwright end-to-end tests
+├── README.md                      # Run + mocking instructions
+├── fixtures.ts                    # clearStorage + mockApis auto-fixtures
+├── onboarding.spec.ts             # First-run overlay
+├── chat.spec.ts                   # Send + assistant reply
+├── favorites.spec.ts              # Heart-tap + Saved drawer
+├── parables.spec.ts               # ParablesDrawer + Reader
+└── settings-export.spec.ts        # Settings → Export
+
+playwright.config.ts               # NEW (Wave 13): Mobile Chrome (Pixel 5), dev-server auto-boot
+vercel.json                        # NEW (Wave 13): daily-verse cron at 09:00 UTC
 ```
 
 ---
@@ -497,6 +585,41 @@ On iOS Safari, the soft keyboard shrinks `window.visualViewport.height` but leav
 
 Combined: the hint can show MULTIPLE times per session (so the user genuinely encounters it once they start chatting), but never twice in the same speech turn, and never more than 3 total per page-load. Generalizable to any "discoverability nudge" UI — the per-event ref enforces "one per occurrence" while the per-session counter caps the lifetime nag count. Also pairs well with an `autoHideMs` so the hint doesn't linger even if the trigger condition stays active.
 
+### 28. VAD with Dormant Gating (NEW)
+`useVoiceActivityDetection` is fully dormant when `enabled = false` — no `AudioContext` is constructed, no `getUserMedia` is called, no rAF loop runs, no permission is requested. This is the privacy-conscious default: the hook is a no-op until the caller flips the gate. Wiring in `ChatInterface` is `enabled: vadConsent === 'accepted' && voiceState === 'speaking'` — so the mic engages ONLY when (a) the user has explicitly consented via `VADConsentPrompt`, AND (b) jAIsus is currently speaking. The hook's main effect depends on `[enabled]` so it spins up + tears down cleanly on every toggle. The cleanup function:
+1. Cancels the rAF loop first (so we don't read freed buffers).
+2. Disconnects the analyser graph (`source.disconnect()`, `analyser.disconnect()`).
+3. Closes the `AudioContext` (releases the audio worklet thread).
+4. Stops every mic track (this is what releases the OS recording indicator).
+5. Clears every ref to null.
+
+A `cancelled` local closure-flag handles the rapid enable/disable race: if `enabled` flips off while `getUserMedia` is still pending, the resolved stream's tracks are stopped immediately and the install is skipped — same pattern as `useCamera`'s generation counter (Key Design Decision #15), but a single-shot flag suffices here since the hook only runs one init at a time. Generalizable to ANY sensor hook (mic, camera, geolocation, accelerometer): start dormant, gate on explicit consent + a contextual condition, clean up aggressively on disable.
+
+### 29. Native VAPID JWT Signing + RFC 8291 (NEW)
+The `web-push` npm package is the obvious dep for Web Push — it's also ~100KB and pulls in a native binding for ECC operations. For an MVP-scale push channel, we don't need any of that — Node's stdlib `crypto` module already does ES256 ECDSA over P-256 and AES-128-GCM with HKDF. The cron handler at `/api/push/send-daily` implements the full protocol from scratch in ~250 lines.
+
+**VAPID JWT** (`buildVapidAuth`): builds a JWS header (`{ typ: 'JWT', alg: 'ES256' }`) + payload (`{ aud: <endpoint origin>, exp: now + 12h, sub: VAPID_SUBJECT }`), base64url-encodes both, concatenates with `.`, and signs with `crypto.sign('SHA256', signingInput, { key, dsaEncoding: 'ieee-p1363' })`. The `ieee-p1363` encoding option is the load-bearing detail — without it, Node defaults to ASN.1 DER (which JWS does NOT accept; JWS expects raw r||s = 64 bytes for P-256). The private key is materialised as a JWK (`kty: 'EC', crv: 'P-256', x, y, d`) then loaded with `crypto.createPrivateKey({ format: 'jwk' })`.
+
+**RFC 8291 aes128gcm payload encryption** (`encryptPayload`): generates an ephemeral P-256 keypair per send via `crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' })`. Computes the ECDH shared secret with `crypto.diffieHellman({ privateKey: eph, publicKey: ua })` (the UA's pubkey is materialised from the JWK form of its `keys.p256dh`). Derives the IKM via HKDF over `(authSecret, sharedSecret, "WebPush: info\0" || ua_pub || eph_pub, 32)`, then derives a CEK (`Content-Encoding: aes128gcm\0`, 16 bytes) and nonce (`Content-Encoding: nonce\0`, 12 bytes) via HKDF over `(salt, IKM)`. Plaintext is `payload || 0x02` (the `0x02` is the single-record delimiter — last record in the aes128gcm content encoding). AES-128-GCM encrypts; output is `salt(16) || rs(4 = 4096) || idlen(1 = 65) || keyid(65 = ephemeral pubkey) || ciphertext || authTag`.
+
+POSTed to the subscription endpoint with `Content-Encoding: aes128gcm`, `Content-Type: application/octet-stream`, `TTL: 86400`, `Urgency: normal`, and the VAPID JWT in `Authorization`. 201/202/200 → counted as sent; 404/410 → the subscription is gone, dropped from store; everything else → counted as failed and left in place (transient).
+
+Generalizable rule: before reaching for a 100KB dep, check if the stdlib already supports the underlying primitive. `crypto.sign(..., { dsaEncoding: 'ieee-p1363' })` is a one-line replacement for almost any JWS-with-EC library; HKDF is six lines of HMAC-SHA-256 chaining.
+
+### 30. Synchronous + Async Rate-Limit Duality (NEW)
+`rate-limit.ts` keeps the original synchronous in-memory `rateLimit(key, config)` AND adds a new `rateLimitAsync(key, config)` backed by Upstash Redis. Both functions return the same `RateLimitResult` shape, so the existing helper `rateLimitResponse(rl)` works unchanged. Migration for a route is one keyword swap:
+
+```typescript
+const rl = rateLimit(`chat:${ip}`, CHAT_LIMIT);          // before
+const rl = await rateLimitAsync(`chat:${ip}`, CHAT_LIMIT); // after
+```
+
+The async path is also self-healing: when Upstash env vars (`UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`) are missing OR any pipeline call fails (network timeout >1s, non-2xx, malformed JSON, command-level error), it falls back to the in-memory limiter. A single `console.warn` is emitted on the FIRST fallback (subsequent fallbacks stay quiet to keep logs clean). The 1s timeout via `AbortController` is the load-bearing safety: a slow or down Upstash MUST NOT block the actual request — better to drift back to per-instance limits than to add latency to every API call.
+
+Window math: fixed-window approximation with `windowSec = ceil(capacity / refillRatePerSec)`. So `{ capacity: 30, refillRatePerSec: 1 }` → 30s window, 30 requests allowed. The boundary edge case (a client can briefly see ~2x capacity at window rollover) is acceptable for these endpoints. Atomicity comes from an Upstash pipeline of `[INCR, EXPIRE]` — INCR returns the post-increment count, EXPIRE is harmless to re-set per call (the TTL bounds itself within the window).
+
+Generalizable rule: when adding a distributed version of an existing utility, keep the OLD API working and add a NEW one with the same return shape. Don't force every caller to migrate at once — let the migration be incremental, lazy, and reversible. The fallback path also doubles as a local-dev "no extra infra needed" mode for free.
+
 ---
 
 ## The 9 Personalities
@@ -613,10 +736,12 @@ The Mac user is `resorb` and the repo lives at:
 
 ### Medium Priority
 - [ ] **Wire `usePullToRefresh` + `PullToRefreshIndicator`** into the empty state — pulls down to refresh the daily verse + kindness + suggested prompts.
-- [ ] **Notifications opt-in** — push subscription flow + a server endpoint for daily verse / kindness / streak reminders. Service worker registration is in place; needs the consent UX and the `PushSubscription` plumbing.
-- [ ] **Voice interruption** — let the user cut off jAIsus mid-sentence by holding the mic. `SpeakingHint` already exposes a tap-to-interrupt path; mic-hold is the natural follow-up.
+- ~~Notifications opt-in~~ — landed in Wave 13/14. Full Web Push stack (subscribe + unsubscribe + cron + RFC 8291 encryption) shipped along with the consent UX. **Pending follow-up: generate VAPID keys + set env vars in production** (`NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, `CRON_SECRET`).
+- ~~Voice interruption~~ — landed in Wave 13/14. `useVoiceActivityDetection` + `VADConsentPrompt` shipped; once consent is granted, sustained voice activity during TTS triggers `stopSpeaking()` + `reset()`.
 - [ ] **Rate limit on `/api/vision`** — capture is client-throttled but server should still cap per-IP.
-- [ ] **Distributed rate limiter** (`@upstash/ratelimit`) when traffic outgrows the in-memory bucket.
+- ~~Distributed rate limiter (`@upstash/ratelimit`)~~ — landed in Wave 13/14. `rateLimitAsync` in `src/lib/rate-limit.ts` uses Upstash Redis when env vars are set, falls back to in-memory bucket otherwise. **Pending follow-up: migrate `/api/chat`, `/api/daily`, `/api/teachings`, `/api/summarize` to call `rateLimitAsync` (currently they all still use the sync `rateLimit`).**
+- [ ] **Replace `/tmp/jaisus-push.json` push subscription storage** with Vercel KV / Upstash / Postgres. Current in-memory + `/tmp` mirror loses subscriptions on cold start, diverges across regions, and doesn't survive function-pool rotation. See `push-server.ts` TODO comment.
+- [ ] **Re-enable notifications from Settings** — `NotificationOptInPrompt` records `markNotificationPromptSeen()` on both Accept and Decline and we never re-prompt. Settings should expose an explicit toggle so a declined user can change their mind.
 - [ ] **Better error display** when provider API keys are missing — surface a real toast instead of silent failure.
 
 ### Ideas / Backlog
@@ -709,6 +834,23 @@ The Mac user is `resorb` and the repo lives at:
    - Static asset → cache-first with background revalidation (stale-while-revalidate)
 6. `VersionCheck` poll-on-focus runs independently — when a new buildId is detected, the page hard-reloads to `?_v=Date.now()`, and the SW pulls fresh HTML on the new navigation.
 
+### Push Notification Flow (NEW — Wave 13/14)
+1. User completes ≥ 2 chat exchanges (`messages.length >= 4`) → `ChatInterface` mounts `<NotificationOptInPrompt>` (gated against `showOnboarding` and `showVADPrompt`).
+2. User taps "Yes, daily verse" → `usePushSubscription.subscribe()` → `Notification.requestPermission()` → `serviceWorker.ready` → `pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: <VAPID_PUBLIC_KEY> })`.
+3. Browser returns a `PushSubscription` (endpoint + p256dh + auth). Client POSTs `{ subscription: sub.toJSON() }` to `/api/push/subscribe`.
+4. `/api/push/subscribe` validates shape (https endpoint, base64url keys), rate-limits 10/min/IP, stores in the in-memory Map + `/tmp/jaisus-push.json` mirror.
+5. Daily at 09:00 UTC: Vercel cron hits `/api/push/send-daily` with `Authorization: Bearer ${CRON_SECRET}` → handler authenticates → loads subscriptions → builds a VAPID JWT (ES256 / P-256, 12h expiry) → encrypts today's verse payload per RFC 8291 aes128gcm → fans out POSTs in parallel.
+6. Each subscription's push service either returns 201/202/200 (delivered to UA) or 404/410 (gone — handler removes from store).
+7. UA receives the push → SW `push` event fires → `self.registration.showNotification(title, { body, icon, badge, data: { url }, tag: 'daily-verse' })`.
+8. User taps → SW `notificationclick` event fires → focuses an open jAIsus tab if any, else `clients.openWindow(url)`.
+
+### VAD Barge-In Flow (NEW — Wave 13/14)
+1. User completes consent for VAD via `<VADConsentPrompt>` (surfaces once per session, first time `voiceState === 'speaking'` and `getVADConsent() === null`).
+2. `setVADConsent('accepted')` persists to `jaisus-vad-consent` localStorage; state updates re-render `ChatInterface`.
+3. `useVoiceActivityDetection({ enabled: true, onSpeechStart })` engages — `getUserMedia({ audio: true })` → `AudioContext` → `MediaStreamSource` → `AnalyserNode` (fftSize=2048, smoothingTimeConstant=0.4). NOT connected to `ctx.destination`.
+4. rAF loop computes RMS on `getByteTimeDomainData` each frame. If RMS > threshold (default 0.02) sustained for ≥ 150ms, `onSpeechStart` fires → `stopSpeaking()` + `reset()`. The barge-in is complete.
+5. When `voiceState` exits 'speaking' (or consent revoked), the hook's cleanup tears everything down: cancel rAF → disconnect graph → close `AudioContext` → stop tracks → clear refs → release OS mic indicator.
+
 ### OG Image Flow (NEW)
 1. A social media crawler / chat preview fetches `/api/og?type=default` (or `?type=verse&text=…&ref=…`, etc.)
 2. Edge runtime invokes the GET handler; query params are sanitized and clamped
@@ -764,7 +906,8 @@ In local dev, `BUILD_ID` is `'dev'` and `VersionCheck` short-circuits — no rel
 ## Recent Commit History (newest first)
 
 ```
-<pending tier-6 commit>  feat: tier-6 — memories panel, search panel, speaking hint, server-side memory, OG meta wired
+<pending tier-7 commit>  feat: tier-7 — voice barge-in (VAD), Web Push daily verse, distributed rate limit, E2E scaffold
+<tier-6 commit>          feat: tier-6 — memories panel, search panel, speaking hint, server-side memory, OG meta wired
 9be302e feat: tier-5 wire-up + HANDOVER refresh
 8f90533 feat: tier-5 wave 8 — PWA service worker, OG images, reading mode, export
 259c442 feat: tier-5 wave 7 — conversation memory, streaks, mood, pull-to-refresh, long-press
