@@ -1,6 +1,7 @@
 'use client';
 
 import type { ActivePanel } from '@/lib/types';
+import { useHaptics } from '@/hooks/useHaptics';
 
 interface ActionButtonsProps {
   onAskQuestion: () => void;
@@ -8,12 +9,14 @@ interface ActionButtonsProps {
 }
 
 export function ActionButtons({ onAskQuestion, onOpenPanel }: ActionButtonsProps) {
+  const { vibrate } = useHaptics();
+  const tap = (fn: () => void) => () => { vibrate('tap'); fn(); };
   return (
     <div className="px-4 py-3 space-y-2.5">
       {/* Dynamic Teachings — full-width tile (the previous "Listen/app" tab
           was a dead button with no panel wired up, so the tab bar is gone). */}
       <button
-        onClick={() => onOpenPanel('teachings')}
+        onClick={tap(() => onOpenPanel('teachings'))}
         className="w-full flex items-center justify-center gap-2 rounded-xl bg-stone-100 px-4 py-2.5 text-sm font-medium text-teal-700 active:scale-[0.98] transition-transform"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -25,7 +28,7 @@ export function ActionButtons({ onAskQuestion, onOpenPanel }: ActionButtonsProps
 
       {/* Ask a Question — full width primary CTA */}
       <button
-        onClick={onAskQuestion}
+        onClick={tap(onAskQuestion)}
         className="w-full flex items-center justify-center gap-3 rounded-xl bg-blue-500 px-4 py-3 text-white font-semibold shadow-md shadow-blue-200 active:scale-[0.98] transition-transform"
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -40,14 +43,14 @@ export function ActionButtons({ onAskQuestion, onOpenPanel }: ActionButtonsProps
       {/* Feature buttons row */}
       <div className="grid grid-cols-2 gap-2">
         <button
-          onClick={() => onOpenPanel('prayer')}
+          onClick={tap(() => onOpenPanel('prayer'))}
           className="flex items-center gap-2 rounded-xl bg-white border border-stone-200 px-3 py-2.5 text-sm font-medium text-stone-700 active:scale-[0.97] transition-transform shadow-sm"
         >
           <span className="text-lg">🙏</span>
           Request Prayer
         </button>
         <button
-          onClick={() => onOpenPanel('parables')}
+          onClick={tap(() => onOpenPanel('parables'))}
           className="flex items-center gap-2 rounded-xl bg-white border border-stone-200 px-3 py-2.5 text-sm font-medium text-stone-700 active:scale-[0.97] transition-transform shadow-sm"
         >
           <span className="text-lg">📖</span>
@@ -58,7 +61,7 @@ export function ActionButtons({ onAskQuestion, onOpenPanel }: ActionButtonsProps
       {/* Second row: Community, Settings */}
       <div className="grid grid-cols-2 gap-2">
         <button
-          onClick={() => onOpenPanel('community')}
+          onClick={tap(() => onOpenPanel('community'))}
           className="flex items-center gap-2 rounded-xl bg-white border border-stone-200 px-3 py-2.5 text-sm font-medium text-stone-600 active:scale-[0.97] transition-transform shadow-sm"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -70,7 +73,7 @@ export function ActionButtons({ onAskQuestion, onOpenPanel }: ActionButtonsProps
           Community
         </button>
         <button
-          onClick={() => onOpenPanel('settings')}
+          onClick={tap(() => onOpenPanel('settings'))}
           className="flex items-center gap-2 rounded-xl bg-white border border-stone-200 px-3 py-2.5 text-sm font-medium text-stone-600 active:scale-[0.97] transition-transform shadow-sm"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">

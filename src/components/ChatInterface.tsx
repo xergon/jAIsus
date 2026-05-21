@@ -20,6 +20,11 @@ import { TeachingPlayer } from './TeachingPlayer';
 import { SettingsPanel, getStoredVisionInterval } from './SettingsPanel';
 import { getPersonality, getStoredPersonalityId, setStoredPersonalityId } from '@/lib/personalities';
 import { CommunityPlaceholder } from './CommunityPlaceholder';
+import { OnboardingOverlay } from './OnboardingOverlay';
+import { SuggestedPrompts } from './SuggestedPrompts';
+import { DailyVerse } from './DailyVerse';
+import { hasSeenOnboarding, markOnboardingSeen } from '@/lib/onboarding';
+import { track } from '@/lib/analytics';
 
 export function ChatInterface() {
   const [input, setInput] = useState('');
@@ -27,6 +32,7 @@ export function ChatInterface() {
   const [autoSpeak, setAutoSpeak] = useState(true);
   const [showTranscript, setShowTranscript] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const [currentEmotion, setCurrentEmotion] = useState<Emotion>('neutral');
   const [visionInterval, setVisionInterval] = useState(60);
@@ -170,8 +176,19 @@ export function ChatInterface() {
     const p = getPersonality(storedPid);
     setStoredVoiceId(p.voiceId);
     setMounted(true);
+    // Show first-run onboarding overlay when localStorage says we haven't yet.
+    // Checked here (client-side, post-mount) to avoid SSR hydration mismatch.
+    if (!hasSeenOnboarding()) {
+      setShowOnboarding(true);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function handleOnboardingComplete() {
+    markOnboardingSeen();
+    setShowOnboarding(false);
+    track('onboarding.completed');
+  }
 
   // Save messages with debouncing.
   // Previously fired on every render with a `messages` change — including each
@@ -547,8 +564,14 @@ export function ChatInterface() {
                 </div>
               )}
               {messages.length === 0 && mounted && !voiceError && (
-                <div className="text-center py-4 text-stone-400">
-                  <p className="text-sm">Ask a question to begin your journey</p>
+                <div className="space-y-4 py-2 animate-fade-in">
+                  <DailyVerse />
+                  <SuggestedPrompts
+                    onPick={(text) => {
+                      track('suggestion.picked');
+                      sendMessage({ text });
+                    }}
+                  />
                 </div>
               )}
               {messages.map(message => (
@@ -625,6 +648,10 @@ export function ChatInterface() {
       <CommunityPlaceholder
         isOpen={activePanel === 'community'}
         onClose={() => setActivePanel('none')}
+      />
+      <OnboardingOverlay
+        isOpen={showOnboarding}
+        onComplete={handleOnboardingComplete}
       />
     </div>
   );

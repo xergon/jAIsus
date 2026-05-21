@@ -1,6 +1,7 @@
 'use client';
 
 import type { VoiceState } from '@/lib/types';
+import { useHaptics } from '@/hooks/useHaptics';
 
 interface VoiceButtonProps {
   voiceState: VoiceState;
@@ -12,6 +13,7 @@ interface VoiceButtonProps {
 export function VoiceButton({ voiceState, onStart, onStop, isSupported }: VoiceButtonProps) {
   const isActive = voiceState === 'listening';
   const isBusy = voiceState === 'processing' || voiceState === 'speaking';
+  const { vibrate } = useHaptics();
 
   const baseClasses = 'relative flex items-center justify-center w-14 h-14 rounded-full transition-all duration-200 active:scale-95 shadow-lg';
   const stateClasses = isActive
@@ -21,9 +23,17 @@ export function VoiceButton({ voiceState, onStart, onStop, isSupported }: VoiceB
       : 'bg-teal-500 text-white shadow-teal-200 hover:bg-teal-600';
   const disabledClasses = !isSupported ? 'opacity-50 cursor-not-allowed' : '';
 
+  function handleClick() {
+    // Tactile confirmation — heavier when starting/stopping a session,
+    // lighter when interrupting/cancelling
+    vibrate(isActive || isBusy ? 'tap' : 'medium');
+    if (isActive || isBusy) onStop();
+    else onStart();
+  }
+
   return (
     <button
-      onClick={isActive || isBusy ? onStop : onStart}
+      onClick={handleClick}
       disabled={!isSupported}
       className={`${baseClasses} ${stateClasses} ${disabledClasses}`}
       aria-label={isActive ? 'Stop listening' : isBusy ? 'Stop speaking' : 'Start listening'}

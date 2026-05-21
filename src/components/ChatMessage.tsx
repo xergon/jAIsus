@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { UIMessage } from 'ai';
 import { stripAllEmotionTags } from '@/lib/emotions';
+import { FavoriteButton } from './FavoriteButton';
 
 interface ChatMessageProps {
   message: UIMessage;
@@ -73,6 +74,13 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
               {contextLabel}
             </span>
           )}
+          <FavoriteButton
+            kind="message"
+            content={textContent}
+            context={contextLabel ?? undefined}
+            size="sm"
+            className="ml-auto -mr-1"
+          />
         </div>
         <div className="bg-white border border-stone-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
           <p className="text-sm text-stone-700 leading-relaxed whitespace-pre-wrap">{displayText}</p>

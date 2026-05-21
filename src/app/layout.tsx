@@ -2,6 +2,9 @@ import type { Metadata, Viewport } from "next";
 import { Inter, Lora } from "next/font/google";
 import "./globals.css";
 import { VersionCheck } from "@/components/VersionCheck";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { ToastProvider } from "@/components/Toast";
+import { AnalyticsInit } from "@/components/AnalyticsInit";
 
 // Build ID baked in at build time. Compared against /api/version at runtime to
 // detect when a new deploy is live and force-reload stale iOS PWAs.
@@ -58,8 +61,12 @@ export default function RootLayout({
         <meta httpEquiv="Expires" content="0" />
       </head>
       <body className="min-h-full flex flex-col font-sans bg-stone-50">
+        {/* VersionCheck stays OUTSIDE the boundary so a render crash inside
+            the app tree doesn't also kill the auto-reload-on-new-deploy path. */}
         <VersionCheck buildId={BUILD_ID} />
-        {children}
+        <AnalyticsInit />
+        <ToastProvider />
+        <ErrorBoundary>{children}</ErrorBoundary>
       </body>
     </html>
   );
