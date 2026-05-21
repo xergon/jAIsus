@@ -210,3 +210,40 @@ self.addEventListener('message', (event) => {
     self.skipWaiting();
   }
 });
+
+// --- push: render a notification when the server pushes a verse --------------
+// Payload (JSON): { title?: string, body?: string, url?: string }
+// Falls back to a generic copy if the payload is missing or unparseable so the
+// user always sees something coherent on push.
+self.addEventListener('push', (event) => {
+  let payload = { title: 'jAIsus', body: 'A new verse for today.', url: '/' };
+  if (event.data) {
+    try { payload = { ...payload, ...event.data.json() }; } catch { /* keep defaults */ }
+  }
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      data: { url: payload.url ?? '/' },
+      tag: 'daily-verse', // collapses duplicates if multiple arrive same day
+    })
+  );
+});
+
+// --- notificationclick: focus an open window or open the app ------------------
+// Tap behavior: bring an existing jAIsus tab forward if there is one;
+// otherwise open a new window at the URL the server told us to.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil(
+    (async () => {
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of clients) {
+        if ('focus' in client) { await client.focus(); return; }
+      }
+      if (self.clients.openWindow) await self.clients.openWindow(url);
+    })()
+  );
+});

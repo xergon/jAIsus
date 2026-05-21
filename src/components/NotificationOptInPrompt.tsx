@@ -1,0 +1,148 @@
+'use client';
+
+import { useRef } from 'react';
+import { useModalA11y } from '@/hooks/useModalA11y';
+import { usePushSubscription } from '@/hooks/usePushSubscription';
+
+/**
+ * One-time consent prompt for daily-verse push notifications.
+ *
+ * Notification permission is sticky and slightly intrusive, so we ask exactly
+ * once: the choice persists to localStorage and we never re-prompt — even if
+ * the user declined. This component handles the persistence; the parent
+ * decides when to mount it (probably after a few uses, on a returning visit).
+ *
+ * Reuses `useModalA11y` for scroll lock, focus trap, Escape-to-close, and
+ * focus restore — matching VADConsentPrompt and the other modals.
+ */
+
+const STORAGE_KEY = 'jaisus-notification-prompt-seen';
+
+/** True if the user has already been shown the prompt (accepted or declined). */
+export function hasSeenNotificationPrompt(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(STORAGE_KEY) === '1';
+  } catch {
+    // Private mode / storage disabled — fail closed (we'll show the prompt
+    // again next session, but that's the lesser evil vs. spamming it now).
+    return false;
+  }
+}
+
+/** Record that the prompt has been shown. Idempotent. */
+export function markNotificationPromptSeen(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY, '1');
+  } catch {
+    // Best effort — see hasSeenNotificationPrompt comment.
+  }
+}
+
+interface NotificationOptInPromptProps {
+  isOpen: boolean;
+  /** Called after the user accepts AND the subscription succeeds. */
+  onAccepted?: () => void;
+  /** Called when the user dismisses (declined or closed). */
+  onDeclined: () => void;
+}
+
+export function NotificationOptInPrompt({
+  isOpen,
+  onAccepted,
+  onDeclined,
+}: NotificationOptInPromptProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const { subscribe } = usePushSubscription();
+
+  useModalA11y({
+    isOpen,
+    onClose: () => {
+      markNotificationPromptSeen();
+      onDeclined();
+    },
+    ref: dialogRef,
+  });
+
+  if (!isOpen) return null;
+
+  const handleDecline = () => {
+    markNotificationPromptSeen();
+    onDeclined();
+  };
+
+  const handleAccept = async () => {
+    markNotificationPromptSeen();
+    const result = await subscribe();
+    if (result.ok) {
+      onAccepted?.();
+    } else {
+      // Permission denied / unsupported / network — close anyway. We
+      // already marked seen so we won't re-prompt; user can re-enable from
+      // Settings later (a future addition).
+      onDeclined();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div
+        className="absolute inset-0 bg-black/40"
+        onClick={handleDecline}
+        aria-hidden="true"
+      />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="notif-title"
+        aria-describedby="notif-body"
+        className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl py-6 px-5"
+      >
+        <div className="flex justify-center mb-3">
+          <div
+            className="w-12 h-12 rounded-full bg-teal-50 flex items-center justify-center text-2xl"
+            aria-hidden="true"
+          >
+            🕊
+          </div>
+        </div>
+
+        <h2
+          id="notif-title"
+          className="text-center text-lg font-bold text-stone-800"
+        >
+          Want a daily verse?
+        </h2>
+
+        <p
+          id="notif-body"
+          className="text-center text-sm text-stone-600 mt-3 leading-relaxed"
+        >
+          We&apos;ll send you one verse a day — that&apos;s it. No promotions,
+          no nudges to come back. Tap a notification to open jAIsus.
+        </p>
+
+        <div className="flex gap-3 mt-6">
+          <button
+            type="button"
+            onClick={handleDecline}
+            className="flex-1 rounded-xl border border-stone-200 bg-stone-50 py-2.5 text-sm font-medium text-stone-600
+              active:scale-[0.98] transition-transform"
+          >
+            Not now
+          </button>
+          <button
+            type="button"
+            onClick={handleAccept}
+            className="flex-1 rounded-xl bg-teal-600 py-2.5 text-sm font-semibold text-white shadow-sm
+              hover:bg-teal-700 active:scale-[0.98] transition-transform"
+          >
+            Yes, daily verse
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
