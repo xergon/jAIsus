@@ -23,6 +23,10 @@ import { CommunityPlaceholder } from './CommunityPlaceholder';
 import { OnboardingOverlay } from './OnboardingOverlay';
 import { SuggestedPrompts } from './SuggestedPrompts';
 import { DailyVerse } from './DailyVerse';
+import { DailyKindness } from './DailyKindness';
+import { GreetingHeader } from './GreetingHeader';
+import { FavoritesPanel } from './FavoritesPanel';
+import { PersonalitySwitcher } from './PersonalitySwitcher';
 import { hasSeenOnboarding, markOnboardingSeen } from '@/lib/onboarding';
 import { track } from '@/lib/analytics';
 
@@ -33,7 +37,6 @@ export function ChatInterface() {
   const [showTranscript, setShowTranscript] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const [currentEmotion, setCurrentEmotion] = useState<Emotion>('neutral');
   const [visionInterval, setVisionInterval] = useState(60);
   const [personalityId, setPersonalityId] = useState('mushroom-guru');
@@ -237,7 +240,6 @@ export function ChatInterface() {
         return;
       }
       activeMessageIdRef.current = lastMessage.id;
-      setSpeakingMessageId(lastMessage.id);
       startSpeaking();
       spokenLengthRef.current = 0;
       queuedSentencesRef.current = new Set();
@@ -281,12 +283,10 @@ export function ChatInterface() {
     }
 
     prevStatusRef.current = status;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, messages, autoSpeak, queueSentence, startSpeaking]);
 
   useEffect(() => {
     if (!isSpeaking && voiceState === 'speaking') {
-      setSpeakingMessageId(null);
       activeMessageIdRef.current = null;
       reset();
     }
@@ -347,7 +347,6 @@ export function ChatInterface() {
       stopRecognition();
     } else if (voiceState === 'speaking' || isSpeaking) {
       stopSpeaking();
-      setSpeakingMessageId(null);
       reset();
       setTimeout(() => startRecognition(), 150);
     } else {
@@ -380,6 +379,17 @@ export function ChatInterface() {
     <div className="flex flex-col min-h-screen bg-stone-50">
       <div className="flex-1 flex flex-col max-w-md mx-auto w-full">
         <HeroSection voiceState={voiceState} interimTranscript={interimTranscript} emotion={currentEmotion} />
+
+        {/* Fast personality switcher — lives just below the hero so the user
+            can taste-test different vibes without opening Settings. */}
+        {mounted && (
+          <div className="px-4 pt-2">
+            <PersonalitySwitcher
+              activeId={personalityId}
+              onChange={handlePersonalityChange}
+            />
+          </div>
+        )}
 
         {!autoSpeak && (
           <ActionButtons
@@ -565,7 +575,9 @@ export function ChatInterface() {
               )}
               {messages.length === 0 && mounted && !voiceError && (
                 <div className="space-y-4 py-2 animate-fade-in">
+                  <GreetingHeader />
                   <DailyVerse />
+                  <DailyKindness />
                   <SuggestedPrompts
                     onPick={(text) => {
                       track('suggestion.picked');
@@ -652,6 +664,11 @@ export function ChatInterface() {
       <OnboardingOverlay
         isOpen={showOnboarding}
         onComplete={handleOnboardingComplete}
+      />
+      <FavoritesPanel
+        isOpen={activePanel === 'favorites'}
+        onClose={() => setActivePanel('none')}
+        onAskAgain={(text) => sendMessage({ text })}
       />
     </div>
   );

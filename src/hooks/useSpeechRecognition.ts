@@ -25,7 +25,6 @@ interface SpeechRecognitionInstance extends EventTarget {
   onspeechend: ((this: SpeechRecognitionInstance, ev: Event) => void) | null;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 interface WindowWithSpeech {
   SpeechRecognition?: new () => SpeechRecognitionInstance;
   webkitSpeechRecognition?: new () => SpeechRecognitionInstance;

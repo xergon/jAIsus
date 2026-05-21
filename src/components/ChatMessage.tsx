@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { UIMessage } from 'ai';
 import { stripAllEmotionTags } from '@/lib/emotions';
 import { FavoriteButton } from './FavoriteButton';
+import { ShareButton } from './ShareButton';
 
 interface ChatMessageProps {
   message: UIMessage;
@@ -79,7 +80,14 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
             content={textContent}
             context={contextLabel ?? undefined}
             size="sm"
-            className="ml-auto -mr-1"
+            className="ml-auto"
+          />
+          <ShareButton
+            kind="message"
+            content={textContent}
+            context={contextLabel ?? undefined}
+            size="sm"
+            className="-mr-1"
           />
         </div>
         <div className="bg-white border border-stone-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
