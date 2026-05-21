@@ -21,8 +21,15 @@ export const dynamic = 'force-dynamic';
 const SUBSCRIBE_LIMIT = { capacity: 10, refillRatePerSec: 10 / 60 };
 
 function isBase64Like(s: unknown): s is string {
-  // base64 / base64url chars — we accept both since browsers vary.
-  return typeof s === 'string' && /^[A-Za-z0-9+/_=-]+$/.test(s) && s.length > 0;
+  if (typeof s !== 'string' || s.length === 0) return false;
+  // Browsers emit either pure base64 (with +/= chars) OR pure base64url
+  // (with -_ chars). Mixing the two alphabets in the same string is a
+  // signal of corruption/injection — that string can't possibly decode to
+  // valid key material and would silently fail downstream during RFC 8291
+  // encryption, dropping the push for that subscription on every send.
+  const isStandardBase64 = /^[A-Za-z0-9+/]+={0,2}$/.test(s);
+  const isBase64Url = /^[A-Za-z0-9_-]+={0,2}$/.test(s);
+  return isStandardBase64 || isBase64Url;
 }
 
 function isValidSubscription(value: unknown): value is PushSubscriptionJSON {

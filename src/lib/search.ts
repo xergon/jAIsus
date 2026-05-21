@@ -18,8 +18,11 @@ export type SearchSource = 'chat' | 'favorite' | 'parable';
 export interface SearchResult {
   id: string;
   source: SearchSource;
-  /** Plain-text excerpt to show in the result list. */
+  /** Plain-text excerpt to show in the result list (may be truncated with ellipses). */
   text: string;
+  /** Full original content — used when the consumer needs the complete text
+   *  (e.g. SearchPanel.onAskAbout sends this to chat, NOT the truncated `text`). */
+  fullText: string;
   /** Brief context label (e.g. "From jAIsus", "Parable of the Good Samaritan", "Saved verse"). */
   context?: string;
   /** Optional timestamp for chat / favorite results. Used as a tiebreaker when ranking. */
@@ -269,6 +272,7 @@ export function searchAll(query: string): SearchResult[] {
       id: `chat:${item.id}`,
       source: 'chat',
       text: buildExcerpt(item.searchable, terms),
+      fullText: item.searchable,
       context: 'From your chat',
       timestamp: item.timestamp,
       score,
@@ -290,6 +294,7 @@ export function searchAll(query: string): SearchResult[] {
       id: `favorite:${fav.id}`,
       source: 'favorite',
       text: buildExcerpt(fav.content, terms),
+      fullText: fav.content,
       context: fav.context ?? favoriteContext(fav),
       timestamp: fav.createdAt,
       score,
@@ -319,6 +324,10 @@ export function searchAll(query: string): SearchResult[] {
       id: `parable:${parable.id}`,
       source: 'parable',
       text: buildExcerpt(excerptSource, terms),
+      // For parables, "ask jAIsus about this" should send the title +
+      // reference rather than the raw scripture text — that yields a more
+      // natural conversation than dumping the parable text into chat.
+      fullText: `Tell me more about ${parable.title} (${parable.reference}).`,
       context: parable.title,
       score,
     });

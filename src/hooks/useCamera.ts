@@ -55,6 +55,10 @@ export function useCamera(): UseCameraResult {
   // has already turned the camera off and we must NOT install the stream
   // (otherwise rapid toggling leaks orphaned MediaStream tracks).
   const generationRef = useRef(0);
+  // In-flight guard for /api/vision. Without this, if Gemini latency exceeds
+  // the 10s capture interval, multiple fetches stack up — wasting quota AND
+  // racing on setSceneDescription. The guard makes overlapping calls a no-op.
+  const visionInFlightRef = useRef(false);
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -83,6 +87,9 @@ export function useCamera(): UseCameraResult {
     // Skip vision when tab is hidden — user can't see results anyway,
     // and Gemini quota is precious
     if (typeof document !== 'undefined' && document.hidden) return;
+    // Skip if a previous /api/vision request is still in flight. Prevents
+    // request pileup under slow Gemini latency (>10s capture interval).
+    if (visionInFlightRef.current) return;
 
     const frame = captureFrame();
     if (!frame) {
@@ -90,6 +97,7 @@ export function useCamera(): UseCameraResult {
       return;
     }
 
+    visionInFlightRef.current = true;
     try {
       const response = await fetch('/api/vision', {
         method: 'POST',
@@ -101,7 +109,7 @@ export function useCamera(): UseCameraResult {
         const body = await response.text();
         console.error('Vision API error:', response.status, body);
         setError(`Vision API error: ${response.status}`);
-        return;
+        return; // visionInFlightRef.current reset by the finally block below
       }
 
       const data = await response.json();
@@ -117,6 +125,8 @@ export function useCamera(): UseCameraResult {
       }
     } catch (err) {
       console.error('Frame analysis error:', err);
+    } finally {
+      visionInFlightRef.current = false;
     }
   }, [captureFrame]);
 

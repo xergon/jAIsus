@@ -135,7 +135,11 @@ export function SearchPanel({
 
   const handleSelect = (result: SearchResult) => {
     if (result.source === 'chat' && onAskAbout) {
-      onAskAbout(result.text);
+      // Send the FULL original message text, not the truncated excerpt.
+      // `result.text` is the display-only excerpt with ellipses; using it
+      // for the prompt would feed jAIsus "…clipped middle…" instead of the
+      // actual content the user wants to ask about.
+      onAskAbout(result.fullText);
     }
     onClose();
   };

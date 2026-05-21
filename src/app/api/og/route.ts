@@ -20,9 +20,16 @@
  */
 import { ImageResponse } from 'next/og';
 import { createElement, type CSSProperties, type ReactElement } from 'react';
+import { clientKey, rateLimit, rateLimitResponse } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
 export const contentType = 'image/png';
+
+// Crawlers + social-media unfurl bots hammer this endpoint. Rendering a PNG
+// uses real Satori CPU. Cap to 120-burst / 2-per-sec sustained so a misbehaving
+// scraper can't run up edge-compute bills. Legitimate traffic (real shares +
+// CDN cache misses) is rare enough that this is comfortable.
+const OG_LIMIT = { capacity: 120, refillRatePerSec: 2 };
 export const size = { width: 1200, height: 630 };
 
 // ---------- design tokens (Tailwind stone/amber palette) ----------
@@ -422,10 +429,17 @@ function messageCard(text: string): ReactElement {
 
 const CACHE_HEADERS = {
   'Cache-Control':
-    'public, max-age=3600, s-maxage=86400, immutable',
+    // `immutable` previously paired with `max-age` here, which is
+    // contradictory (immutable says "never revalidate"). Drop `immutable`
+    // and rely on the max-age/s-maxage pair — crawlers can re-render if
+    // they really want to, and we still get the long s-maxage at the edge.
+    'public, max-age=3600, s-maxage=86400',
 } as const;
 
 export async function GET(req: Request): Promise<Response> {
+  const rl = rateLimit(`og:${clientKey(req)}`, OG_LIMIT);
+  if (!rl.ok) return rateLimitResponse(rl);
+
   try {
     const url = new URL(req.url);
     const type = (url.searchParams.get('type') || 'default').toLowerCase();

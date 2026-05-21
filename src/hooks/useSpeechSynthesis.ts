@@ -85,17 +85,23 @@ function unlockAudio() {
   }
 }
 
-// Set up unlock listeners once.
+// Set up unlock listeners once per browser session (NOT once per module load).
 //
-// Using { once: true } means each listener auto-removes after firing — no
-// need to call removeEventListener manually. Combined with the
-// `audioUnlocked` guard inside unlockAudio(), this is safe even if multiple
-// events fire (e.g., a click triggers both touchstart and click). Previously
-// these used { once: false } with manual removal, which leaked listeners on
-// HMR reloads and on unmounts before audio was unlocked.
+// Using { once: true } means each listener auto-removes after firing.
+// The extra `window.__jaisusAudioUnlockBound` guard prevents HMR / module
+// re-evaluation from re-attaching duplicate listeners before the user's
+// first interaction fires them. Combined with the `audioUnlocked` guard
+// inside unlockAudio(), this is safe even if multiple events fire (e.g.,
+// a click triggers both touchstart and click).
 if (typeof window !== 'undefined') {
-  const unlockEvents = ['touchstart', 'touchend', 'click', 'keydown'];
-  unlockEvents.forEach(e => document.addEventListener(e, unlockAudio, { capture: true, once: true, passive: true }));
+  const w = window as unknown as { __jaisusAudioUnlockBound?: boolean };
+  if (!w.__jaisusAudioUnlockBound) {
+    w.__jaisusAudioUnlockBound = true;
+    const unlockEvents = ['touchstart', 'touchend', 'click', 'keydown'];
+    unlockEvents.forEach(e =>
+      document.addEventListener(e, unlockAudio, { capture: true, once: true, passive: true })
+    );
+  }
 }
 
 export function useSpeechSynthesis(): SpeechSynthesisResult {

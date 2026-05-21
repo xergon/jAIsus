@@ -164,10 +164,20 @@ function encryptPayload(
 
   // Ephemeral keypair (each push needs its own).
   const eph = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
-  const ephPublicKeyDer = eph.publicKey.export({ type: 'spki', format: 'der' });
-  // Strip the SPKI prefix to get raw uncompressed 65-byte point.
-  // The last 65 bytes of the DER blob are the uncompressed EC point.
-  const ephPublicKey = ephPublicKeyDer.subarray(ephPublicKeyDer.length - 65);
+  // Build the uncompressed EC point from the JWK form (encoding-stable).
+  // Previously this sliced the LAST 65 bytes off the SPKI DER, which worked
+  // only because Node's current ASN.1 layout happens to end with the point.
+  // Reconstructing from JWK x/y is portable across Node/OpenSSL versions
+  // and matches the same approach already used for `uaKeyObject` below.
+  const ephJwk = eph.publicKey.export({ format: 'jwk' }) as { x: string; y: string };
+  const ephPublicKey = Buffer.concat([
+    Buffer.from([0x04]), // uncompressed-point prefix
+    b64urlDecode(ephJwk.x),
+    b64urlDecode(ephJwk.y),
+  ]);
+  if (ephPublicKey.length !== 65) {
+    throw new Error('Unexpected ephemeral key length');
+  }
 
   // ECDH shared secret. We compute IKM via diffieHellman with the UA key.
   const uaKeyObject = crypto.createPublicKey({

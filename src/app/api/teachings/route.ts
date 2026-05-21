@@ -27,22 +27,35 @@ export async function POST(req: Request) {
   const rl = rateLimit(`teachings:${clientKey(req)}`, TEACHING_LIMIT);
   if (!rl.ok) return rateLimitResponse(rl);
 
-  const { topic }: { topic: string } = await req.json();
+  // Defensive parse — matches chat/tts/vision/summarize routes.
+  // Previously: malformed body threw a raw 500 with a stack trace.
+  let body: { topic?: unknown };
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+
+  const topic = typeof body.topic === 'string' ? body.topic : '';
 
   // Validate against allowlist — prevents abuse via crafted topics that
   // could waste tokens or attempt prompt injection.
-  if (typeof topic !== 'string' || !ALLOWED_TOPICS.has(topic.toLowerCase())) {
+  if (!topic || !ALLOWED_TOPICS.has(topic.toLowerCase())) {
     return Response.json({ error: 'Invalid topic' }, { status: 400 });
   }
 
   // Use Haiku 4.5 (same as chat route — verified working).
   // Previous model ID 'claude-sonnet-4-6' didn't exist and broke this endpoint.
   // Haiku is plenty for the teaching format and ~5x cheaper than Sonnet.
-  const { text } = await generateText({
-    model: anthropic('claude-haiku-4-5-20251001'),
-    system: TEACHING_PROMPT,
-    prompt: `Generate a spiritual teaching about: ${topic}`,
-  });
-
-  return Response.json({ teaching: text });
+  try {
+    const { text } = await generateText({
+      model: anthropic('claude-haiku-4-5-20251001'),
+      system: TEACHING_PROMPT,
+      prompt: `Generate a spiritual teaching about: ${topic}`,
+    });
+    return Response.json({ teaching: text });
+  } catch (err) {
+    console.error('Teaching generation failed:', err instanceof Error ? err.message : String(err));
+    return Response.json({ error: 'Teaching generation failed' }, { status: 500 });
+  }
 }

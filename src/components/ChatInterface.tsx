@@ -140,12 +140,26 @@ export function ChatInterface() {
   const mountedRef = useRef(false);
   useEffect(() => { mountedRef.current = mounted; }, [mounted]);
 
-  // Immediate first reaction when camera turns on and first scene arrives
+  // Immediate first reaction when camera turns on and first scene arrives.
+  // `tryFirstTimeoutRef` tracks the recursive setTimeout chain so we can
+  // cancel it on camera-off / unmount and prevent a stale sendMessage when
+  // the user disables the camera mid-poll.
   const hasReactedToCamera = useRef(false);
+  const tryFirstTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // `lastVisionPingTimeRef` persists across re-runs of the auto-vision effect.
+  // Previously this lived as `let lastPingTime` inside the effect, which
+  // meant changing the vision-interval slider reset it to Date.now() — a
+  // user who shortened the interval mid-session waited the FULL new interval
+  // before the next ping. With a ref the timestamp survives effect remounts.
+  const lastVisionPingTimeRef = useRef(0);
   useEffect(() => {
     // Reset when camera turns off
     if (!cameraActive) {
       hasReactedToCamera.current = false;
+      if (tryFirstTimeoutRef.current !== null) {
+        clearTimeout(tryFirstTimeoutRef.current);
+        tryFirstTimeoutRef.current = null;
+      }
       return;
     }
     // Fire once when we get the first scene description
@@ -156,10 +170,14 @@ export function ChatInterface() {
     hasReactedToCamera.current = true;
     console.log('First camera reaction — immediate vision ping');
 
-    // Wait for status to be ready, then send
+    // Wait for status to be ready, then send. The recursive setTimeout is
+    // tracked in a ref so we can cancel it if the user turns the camera
+    // off / the component unmounts during the wait.
     const tryFirst = () => {
+      tryFirstTimeoutRef.current = null;
+      if (!mountedRef.current || !cameraActive) return;
       if (statusRef.current !== 'ready') {
-        setTimeout(tryFirst, 500);
+        tryFirstTimeoutRef.current = setTimeout(tryFirst, 500);
         return;
       }
       try {
@@ -169,6 +187,13 @@ export function ChatInterface() {
       }
     };
     tryFirst();
+
+    return () => {
+      if (tryFirstTimeoutRef.current !== null) {
+        clearTimeout(tryFirstTimeoutRef.current);
+        tryFirstTimeoutRef.current = null;
+      }
+    };
   }, [cameraActive, sceneDescription]);
 
   // Recurring auto-vision: periodic prompts while camera is active
@@ -185,20 +210,30 @@ export function ChatInterface() {
       '(comment on what is happening around you)',
     ];
     let promptIndex = 0;
-    let lastPingTime = Date.now();
+    // First-ever auto-ping after camera activation: seed to "now" so we don't
+    // immediately fire (the first-reaction effect already handled that path).
+    // On subsequent effect re-runs (e.g. visionInterval slider changes), the
+    // ref's previous value survives — so a shortened interval can fire
+    // immediately if enough time has already elapsed since the last ping.
+    if (lastVisionPingTimeRef.current === 0) {
+      lastVisionPingTimeRef.current = Date.now();
+    }
 
     console.log('Auto-vision interval set to', visionInterval, 'seconds');
     const interval = setInterval(() => {
       if (!mountedRef.current) return;
       if (!sceneRef.current) return;
+      // Skip while tab is hidden — user can't see the response and Gemini
+      // quota is finite. Resumes naturally when the tab returns.
+      if (typeof document !== 'undefined' && document.hidden) return;
       // Check if enough time has elapsed since last successful ping
-      const elapsed = (Date.now() - lastPingTime) / 1000;
+      const elapsed = (Date.now() - lastVisionPingTimeRef.current) / 1000;
       if (elapsed < visionInterval) return;
       // Wait for ready status — but because we tick every 2s, we'll
       // catch the moment jAIsus finishes speaking almost immediately
       if (statusRef.current !== 'ready') return;
 
-      lastPingTime = Date.now();
+      lastVisionPingTimeRef.current = Date.now();
       const prompt = visionPrompts[promptIndex % visionPrompts.length];
       promptIndex++;
       console.log('Auto-vision ping:', prompt);
@@ -207,10 +242,18 @@ export function ChatInterface() {
       } catch (err) {
         console.warn('Auto-vision sendMessage failed:', err);
       }
-    }, 2000); // Fast tick — actual interval controlled by lastPingTime
+    }, 2000); // Fast tick — actual interval controlled by lastVisionPingTimeRef
 
     return () => clearInterval(interval);
   }, [cameraActive, autoSpeak, visionInterval]);
+
+  // Reset the auto-vision timestamp when the camera turns off so the next
+  // camera activation seeds fresh from "now" rather than firing immediately.
+  useEffect(() => {
+    if (!cameraActive) {
+      lastVisionPingTimeRef.current = 0;
+    }
+  }, [cameraActive]);
 
   // Load history + settings on mount
   // Load history + settings exactly ONCE on mount.
@@ -411,8 +454,32 @@ export function ChatInterface() {
     setShowNotificationPrompt(true);
   }, [messages, showOnboarding, showVADPrompt, mounted]);
 
+  // Auto-scroll the chat to the latest message, but only when the user is
+  // already near the bottom. Previously this fired on every streaming token
+  // with `behavior: 'smooth'`, which:
+  //   1. Hijacked the page scroll if the user scrolled up to re-read.
+  //   2. Jank-locked iOS Safari during long streams (queued smooth-scrolls
+  //      compete with the user's touch-scroll inertia).
+  // Now: 'auto' instead of 'smooth', and only scrolls if the user is within
+  // 120px of the bottom (i.e., they hadn't deliberately scrolled away).
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const end = chatEndRef.current;
+    if (!end) return;
+    // Find the scrollable ancestor. The chat list lives inside an
+    // overflow-y-auto container; if we can't find one, fall back to the
+    // viewport so the behavior degrades gracefully.
+    let scroller: HTMLElement | null = end.parentElement;
+    while (scroller && scroller !== document.body) {
+      const style = window.getComputedStyle(scroller);
+      if (style.overflowY === 'auto' || style.overflowY === 'scroll') break;
+      scroller = scroller.parentElement;
+    }
+    const nearBottom = scroller && scroller !== document.body
+      ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120
+      : window.innerHeight + window.scrollY > document.body.offsetHeight - 120;
+    if (nearBottom) {
+      end.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+    }
   }, [messages]);
 
   const handleVoiceResult = useCallback((transcript: string) => {
