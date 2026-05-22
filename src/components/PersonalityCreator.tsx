@@ -67,6 +67,14 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
   const [showList, setShowList] = useState(true);
   const [list, setList] = useState<CustomPersonality[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  // Audit fix: two-tap delete confirm — first tap arms, second commits.
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const deleteConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (deleteConfirmTimerRef.current) clearTimeout(deleteConfirmTimerRef.current);
+    };
+  }, []);
 
   // Hydrate list on open + subscribe to cross-tab changes.
   // Audit fix: filter the `storage` event by key so unrelated localStorage
@@ -156,6 +164,24 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
   }
 
   function handleDelete(p: CustomPersonality) {
+    // Audit fix: two-tap confirm on delete. Previously a single tap erased
+    // a personality with no recovery path. First tap arms `confirmingDeleteId`,
+    // second tap (or any tap within 3s) commits; tap elsewhere or 3s timeout
+    // disarms.
+    if (confirmingDeleteId !== p.id) {
+      setConfirmingDeleteId(p.id);
+      if (deleteConfirmTimerRef.current) clearTimeout(deleteConfirmTimerRef.current);
+      deleteConfirmTimerRef.current = setTimeout(() => {
+        setConfirmingDeleteId(null);
+        deleteConfirmTimerRef.current = null;
+      }, 3000);
+      return;
+    }
+    if (deleteConfirmTimerRef.current) {
+      clearTimeout(deleteConfirmTimerRef.current);
+      deleteConfirmTimerRef.current = null;
+    }
+    setConfirmingDeleteId(null);
     if (!deleteCustomPersonality(p.id)) {
       toast.error('Could not delete.');
       return;
@@ -238,11 +264,16 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
                         Edit
                       </button>
                       <button
+                        type="button"
                         onClick={() => handleDelete(p)}
-                        className="text-xs px-2 py-1 rounded-lg text-rose-600 hover:bg-rose-50"
-                        aria-label={`Delete ${p.name}`}
+                        className={`text-xs px-2 py-1 rounded-lg min-h-[28px] ${
+                          confirmingDeleteId === p.id
+                            ? 'bg-rose-500 text-white font-semibold'
+                            : 'text-rose-600 hover:bg-rose-50'
+                        }`}
+                        aria-label={confirmingDeleteId === p.id ? `Tap again to confirm delete ${p.name}` : `Delete ${p.name}`}
                       >
-                        Delete
+                        {confirmingDeleteId === p.id ? 'Confirm?' : 'Delete'}
                       </button>
                     </div>
                   </div>

@@ -74,6 +74,10 @@ export function ChatInterface() {
   const prevStatusRef = useRef<string>('ready');
   const activeMessageIdRef = useRef<string | null>(null);
   const lastSpokenTextRef = useRef<string>('');
+  // Audit fix (race #9): scope the spoken-text dedup to the message ID it
+  // was set under so a coincidentally-identical short reply from a new
+  // message doesn't get silently muted.
+  const lastSpokenMessageIdRef = useRef<string | null>(null);
   // Audit fix: stash the deferred-recognition-start timer so a rapid double-tap
   // doesn't stack starts, and unmount cleanup can cancel it.
   const voiceToggleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -147,12 +151,19 @@ export function ChatInterface() {
     },
   }), []);
 
-  const { messages, sendMessage, status, setMessages } = useChat({ transport });
+  const { messages, sendMessage, status, setMessages, stop: stopChat } = useChat({ transport });
 
   // Auto-vision: periodic + immediate first reaction
   const statusRef = useRef(status);
   useEffect(() => { statusRef.current = status; }, [status]);
   useEffect(() => { sendMessageRef.current = sendMessage; }, [sendMessage]);
+  // Audit fix (race #5): auto-vision ping must not fire while TTS is still
+  // draining the previous reply's sentence queue. statusRef returns to
+  // 'ready' the moment streaming ends, but TTS can keep playing for many
+  // more seconds. Mirror isSpeaking into a ref so the interval can gate on
+  // it without re-binding to React state on every tick.
+  const isSpeakingRef = useRef(isSpeaking);
+  useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
 
   const mountedRef = useRef(false);
   useEffect(() => { mountedRef.current = mounted; }, [mounted]);
@@ -249,6 +260,12 @@ export function ChatInterface() {
       // Wait for ready status — but because we tick every 2s, we'll
       // catch the moment jAIsus finishes speaking almost immediately
       if (statusRef.current !== 'ready') return;
+      // Audit fix (race #5): also wait for TTS to actually finish reading
+      // the previous response. status flips to 'ready' the moment streaming
+      // ends, but the sentence queue can still have 3-4 unspoken sentences
+      // draining. Firing here would stack two queues into the same warm
+      // audio element and silently drop the in-flight onended handlers.
+      if (isSpeakingRef.current) return;
 
       lastVisionPingTimeRef.current = Date.now();
       const prompt = visionPrompts[promptIndex % visionPrompts.length];
@@ -357,13 +374,28 @@ export function ChatInterface() {
       // against the new message's text using the OLD spokenLength offset → wrong chunks queued.
       // Now: seed spokenLength to the already-spoken text length so further streaming picks up
       // cleanly from there, and start a fresh queued-sentences set scoped to this new id.
-      if (fullText && fullText === lastSpokenTextRef.current) {
+      //
+      // Audit fix (race #9): the equality dedup is only valid for the SAME
+      // message ID swap. If a regenerate / retry produces a new message ID
+      // whose opening tokens coincidentally equal the previous message's
+      // full text (common for short replies like "Yes."), this used to
+      // silently mute the new message. Pair lastSpokenTextRef with the id
+      // it was set under, and only honor the equality check when ids match.
+      if (
+        fullText &&
+        fullText === lastSpokenTextRef.current &&
+        lastSpokenMessageIdRef.current === lastMessage.id
+      ) {
         activeMessageIdRef.current = lastMessage.id;
         spokenLengthRef.current = fullText.length;
         queuedSentencesRef.current = new Set();
         prevStatusRef.current = status;
         return;
       }
+      // New message ID — clear the stale spoken-text marker so it can't
+      // falsely match a subsequent unrelated message.
+      lastSpokenTextRef.current = '';
+      lastSpokenMessageIdRef.current = null;
       activeMessageIdRef.current = lastMessage.id;
       startSpeaking();
       spokenLengthRef.current = 0;
@@ -396,7 +428,13 @@ export function ChatInterface() {
       }
     }
 
-    if (prevStatusRef.current === 'streaming' && status === 'ready') {
+    // Audit fix (race #10): also flush on 'error' transition, not only
+    // 'ready'. If a network drop or server abort flips status straight to
+    // 'error', the end-of-stream queueSentence(null) sentinel would never
+    // be sent, processQueue would block forever on its 100ms wait, and
+    // lastQueuedRef would retain the final sentence — silently muting it
+    // on the next legitimate stream.
+    if (prevStatusRef.current === 'streaming' && (status === 'ready' || status === 'error')) {
       const remaining = fullText.slice(spokenLengthRef.current).trim();
       if (remaining.length > 5 && !queuedSentencesRef.current.has(remaining)) {
         queuedSentencesRef.current.add(remaining);
@@ -404,6 +442,7 @@ export function ChatInterface() {
       }
       queueSentence(null);
       lastSpokenTextRef.current = fullText; // Track for dedup
+      lastSpokenMessageIdRef.current = lastMessage.id;
       spokenLengthRef.current = 0;
     }
 
@@ -574,15 +613,20 @@ export function ChatInterface() {
   }
 
   function handleVoiceToggle() {
+    // Audit fix (race): clear any pending toggle-timer at the TOP of the
+    // function, not only in the speaking branch. Without this, the sequence
+    // "speaking → tap → idle within 150ms → tap → idle branch starts
+    // recognition directly" would still let the original 150ms timer fire
+    // afterwards and double-start the recognition state machine.
+    if (voiceToggleTimerRef.current) {
+      clearTimeout(voiceToggleTimerRef.current);
+      voiceToggleTimerRef.current = null;
+    }
     if (voiceState === 'listening') {
       stopRecognition();
     } else if (voiceState === 'speaking' || isSpeaking) {
       stopSpeaking();
       reset();
-      // Audit fix: clear any prior pending toggle-timer so a rapid double-tap
-      // doesn't stack handle-recognition starts. Also store the handle in a
-      // ref so the unmount cleanup can cancel it.
-      if (voiceToggleTimerRef.current) clearTimeout(voiceToggleTimerRef.current);
       voiceToggleTimerRef.current = setTimeout(() => {
         voiceToggleTimerRef.current = null;
         startRecognition();
@@ -593,6 +637,12 @@ export function ChatInterface() {
   }
 
   function handleClearHistory() {
+    // Audit fix: abort the in-flight chat stream FIRST. Without this, a clear
+    // during streaming would let tokens keep arriving on a destroyed message,
+    // useChat would re-insert under a new ID, and the streaming-TTS effect
+    // would re-engage with stale spokenLength / activeMessageId state.
+    try { stopChat(); } catch { /* useChat may not expose stop in some states */ }
+
     // Before wiping, save a one-sentence summary of the conversation so jAIsus
     // can carry a thread of memory into the next session. Best-effort, async,
     // doesn't block clearing.
@@ -609,11 +659,22 @@ export function ChatInterface() {
     queuedSentencesRef.current.clear();
     activeMessageIdRef.current = null;
     lastSpokenTextRef.current = '';
+    lastSpokenMessageIdRef.current = null;
     clearHistory();
     setMessages([]);
   }
 
   function handlePersonalityChange(id: string) {
+    // Audit fix (race #2): if a chat is currently streaming when the user
+    // switches personality, stop it. Without this, the in-flight response
+    // (from the OLD personality) keeps streaming AND subsequent sentences
+    // are passed to TTS with the NEW personality's voice — old text in a
+    // new voice. Aborting the stream is the least-surprising behavior;
+    // the user can re-ask under the new persona.
+    if (status === 'submitted' || status === 'streaming') {
+      try { stopChat(); } catch { /* may not be available */ }
+      stopSpeaking();
+    }
     setPersonalityId(id);
     personalityRef.current = id;
     setStoredPersonalityId(id);

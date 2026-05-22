@@ -83,6 +83,9 @@ export function SavedMemosPanel({
 
   const [confirmingClear, setConfirmingClear] = useState(false);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Audit fix: per-item delete also two-taps to confirm.
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const perItemConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Pin "now" per-open so relative times don't shift while user reads.
   const [now, setNow] = useState<number>(() => Date.now());
@@ -107,25 +110,38 @@ export function SavedMemosPanel({
     };
   }, []);
 
+  // Audit fix: keep onStopSpeaking in a ref so the close+unmount effects
+  // can call it without re-binding on every parent re-render (and without
+  // the stale `speakingId` dep causing the cleanup branch to skip when
+  // close + isSpeaking flip in the same tick).
+  const onStopSpeakingRef = useRef(onStopSpeaking);
+  useEffect(() => { onStopSpeakingRef.current = onStopSpeaking; }, [onStopSpeaking]);
+
   // Reset transient UI + refresh "now" snapshot on each open.
+  // Audit fix: dropped `speakingId` from deps. Previously the close path
+  // could miss the stop call when isSpeaking and isOpen flipped together
+  // (the speakingId watcher below cleared the id before this effect ran).
+  // We now unconditionally call onStopSpeaking on close — it's idempotent
+  // in the parent — and rely on the ref to avoid re-binding noise.
   useEffect(() => {
     if (!isOpen) {
       setExpandedId(null);
       setConfirmingClear(false);
+      setConfirmingDeleteId(null);
       if (confirmTimerRef.current) {
         clearTimeout(confirmTimerRef.current);
         confirmTimerRef.current = null;
       }
-      // Stop any in-flight playback when the panel closes — otherwise the
-      // user navigates away and jAIsus keeps reciting an old memo.
-      if (speakingId) {
-        onStopSpeaking();
-        setSpeakingId(null);
+      if (perItemConfirmTimerRef.current) {
+        clearTimeout(perItemConfirmTimerRef.current);
+        perItemConfirmTimerRef.current = null;
       }
+      onStopSpeakingRef.current();
+      setSpeakingId(null);
       return;
     }
     setNow(Date.now());
-  }, [isOpen, onStopSpeaking, speakingId]);
+  }, [isOpen]);
 
   // If TTS naturally ends (or the parent stops it for another reason),
   // clear the per-memo speaking indicator so the icon flips back.
@@ -136,9 +152,13 @@ export function SavedMemosPanel({
   }, [isSpeaking, speakingId]);
 
   // Cleanup pending confirm timer on unmount.
+  // Audit fix: also stop any in-flight TTS on unmount. Previously, a route
+  // change / parent unmount mid-playback would leak the audio.
   useEffect(() => {
     return () => {
       if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+      if (perItemConfirmTimerRef.current) clearTimeout(perItemConfirmTimerRef.current);
+      onStopSpeakingRef.current();
     };
   }, []);
 
@@ -158,12 +178,34 @@ export function SavedMemosPanel({
 
   const handleDelete = (id: string) => {
     vibrate('tap');
+    // Audit fix: two-tap confirm so a fat-finger doesn't silently erase a
+    // memo. Same pattern as Clear-all below: first tap arms `confirmingId`,
+    // second tap (or any tap within 3s) commits. Tap-elsewhere or 3s timeout
+    // disarms.
+    if (confirmingDeleteId !== id) {
+      setConfirmingDeleteId(id);
+      if (perItemConfirmTimerRef.current) clearTimeout(perItemConfirmTimerRef.current);
+      perItemConfirmTimerRef.current = setTimeout(() => {
+        setConfirmingDeleteId(null);
+        perItemConfirmTimerRef.current = null;
+      }, 3000);
+      return;
+    }
+    if (perItemConfirmTimerRef.current) {
+      clearTimeout(perItemConfirmTimerRef.current);
+      perItemConfirmTimerRef.current = null;
+    }
+    setConfirmingDeleteId(null);
     if (speakingId === id) {
       onStopSpeaking();
       setSpeakingId(null);
     }
+    // Audit fix: surface failure too — writeAll can return false on quota
+    // exhaustion / read-only filesystem. Previously we silently no-op'd.
     if (deleteVoiceMemo(id)) {
       toast.success('Memo deleted');
+    } else {
+      toast.error("Couldn't delete memo — storage unavailable.");
     }
   };
 
@@ -275,10 +317,14 @@ export function SavedMemosPanel({
                       <button
                         type="button"
                         onClick={() => handleDelete(m.id)}
-                        aria-label="Delete this memo"
-                        className="w-7 h-7 flex items-center justify-center rounded-full text-stone-400 hover:text-rose-600 hover:bg-rose-50 active:scale-[0.95] transition-all text-xs"
+                        aria-label={confirmingDeleteId === m.id ? 'Tap again to confirm delete' : 'Delete this memo'}
+                        className={`min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-full active:scale-[0.95] transition-all text-xs px-2 ${
+                          confirmingDeleteId === m.id
+                            ? 'bg-rose-500 text-white font-semibold'
+                            : 'text-stone-400 hover:text-rose-600 hover:bg-rose-50'
+                        }`}
                       >
-                        <span aria-hidden="true">❌</span>
+                        {confirmingDeleteId === m.id ? 'Confirm?' : <span aria-hidden="true">❌</span>}
                       </button>
                     </div>
 
