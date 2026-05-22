@@ -24,6 +24,12 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
     p.themes.some(t => t.toLowerCase().includes(search.toLowerCase()))
   );
 
+  // Audit fix: when ParableReader opens, hide this drawer's interactive
+  // surface so the still-rendered backdrop doesn't sit on top of the reader
+  // capturing taps. Otherwise tapping anywhere on the reader's edge would
+  // close the drawer (and the reader) instead of letting the reader handle it.
+  const drawerActive = isOpen && !readingParable;
+
   return (
     <div
       className={`fixed inset-0 z-50 transition-all duration-300 ${
@@ -34,7 +40,7 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
       <div
         className={`absolute inset-0 bg-black/40 transition-opacity duration-300 ${
           isOpen ? 'opacity-100' : 'opacity-0'
-        }`}
+        } ${drawerActive ? '' : 'pointer-events-none'}`}
         onClick={onClose}
         aria-hidden="true"
       />
@@ -87,6 +93,7 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
             {filtered.map(parable => (
               <button
                 key={parable.id}
+                type="button"
                 onClick={() => setReadingParable(parable)}
                 className="w-full flex items-start gap-3 p-3 text-left rounded-xl border border-stone-200 bg-stone-50 active:scale-[0.99] transition-transform"
                 aria-label={`Open ${parable.title} in reading mode`}

@@ -48,11 +48,31 @@ export async function POST(req: Request) {
 
     // Strip data URL prefix if present (e.g., "data:image/jpeg;base64,...").
     // Tolerate malformed prefixes — split[1] may be empty/undefined.
-    const base64Data = body.image.includes(',')
-      ? (body.image.split(',')[1] ?? '')
-      : body.image;
+    //
+    // Audit fix: validate that the data-URL prefix actually claims an image
+    // type we accept AND that the body looks like base64. Previously we'd
+    // forward anything ("data:application/pdf;base64,...", arbitrary bytes,
+    // SVG with embedded scripts) to Gemini with a hardcoded `image/jpeg`
+    // mime, wasting quota and routing non-images to a vision model.
+    let mimeType = 'image/jpeg';
+    let base64Data: string;
+    if (body.image.includes(',')) {
+      const match = body.image.match(/^data:(image\/(?:jpeg|png|webp));base64,(.*)$/);
+      if (!match) {
+        return Response.json({ error: 'Unsupported image format' }, { status: 415 });
+      }
+      mimeType = match[1];
+      base64Data = match[2] ?? '';
+    } else {
+      base64Data = body.image;
+    }
     if (!base64Data) {
       return Response.json({ error: 'Empty image payload' }, { status: 400 });
+    }
+    // Reject anything that isn't a plausible base64 body. JSON serializing
+    // and forwarding raw binary to Gemini is just burning quota on garbage.
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64Data)) {
+      return Response.json({ error: 'Image payload is not valid base64' }, { status: 400 });
     }
 
     // Use Gemini REST API directly (avoids SDK base64 encoding issues).
@@ -73,9 +93,14 @@ export async function POST(req: Request) {
         contents: [{
           parts: [
             { text: SCENE_PROMPT },
-            { inlineData: { mimeType: 'image/jpeg', data: base64Data } },
+            { inlineData: { mimeType, data: base64Data } },
           ],
         }],
+        // Audit fix: bound the output. The scene caption is meant to be 1-2
+        // short sentences; without a cap, a model glitch or adversarial
+        // frame could produce thousands of tokens of billed output. 120
+        // tokens is generous for two sentences.
+        generationConfig: { maxOutputTokens: 120 },
       }),
       signal: req.signal,
     });

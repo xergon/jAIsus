@@ -52,6 +52,9 @@ export async function POST(req: Request) {
       model: anthropic('claude-haiku-4-5-20251001'),
       system: TEACHING_PROMPT,
       prompt: `Generate a spiritual teaching about: ${topic}`,
+      // Audit fix: stop billing for the generation when the client hangs up.
+      // Teachings are the longest-form Anthropic call in the app.
+      abortSignal: req.signal,
     });
     return Response.json({ teaching: text });
   } catch (err) {

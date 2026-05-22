@@ -114,6 +114,10 @@ export async function POST(req: Request) {
       system: SYSTEM_PROMPT,
       prompt: transcript,
       maxOutputTokens: 80,
+      // Audit fix: wire client-abort to the Anthropic call so a client
+      // disconnect (page nav, modal close) stops the generation and we
+      // don't keep billing for tokens nobody will read.
+      abortSignal: req.signal,
     });
 
     const summary = (result.text ?? '').trim();

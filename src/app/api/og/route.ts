@@ -479,10 +479,12 @@ export async function GET(req: Request): Promise<Response> {
         headers: { ...CACHE_HEADERS },
       });
     } catch {
-      const message = err instanceof Error ? err.message : 'unknown error';
-      return new Response(`OG image generation failed: ${message}`, {
-        status: 500,
-      });
+      // Audit fix: never echo the original error message back to the
+      // caller. On edge runtime, err.message can include upstream font
+      // paths, library internals, or other deployment-fingerprint detail
+      // that's pointless for the requester and useful only to attackers.
+      // The detailed error is already logged via the outer catch.
+      return new Response('OG image generation failed', { status: 500 });
     }
   }
 }

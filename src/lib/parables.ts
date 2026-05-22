@@ -407,7 +407,7 @@ export const parables: Parable[] = [
     suggestPrompt: 'How does this parable help us think before making big decisions?',
   },
   {
-    id: 'true-vine-pruning',
+    id: 'wheat-and-weeds',
     title: 'The Wheat and the Weeds',
     reference: 'Matthew 13:24-30',
     summary: 'An enemy sows weeds among the wheat; the owner lets them grow together until the harvest, when they will be separated — a picture of patience and final judgment.',
@@ -434,7 +434,7 @@ export const parables: Parable[] = [
     suggestPrompt: 'How can the birds and lilies help quiet our worry today?',
   },
   {
-    id: 'two-foundations',
+    id: 'eye-as-the-lamp',
     title: 'The Eye as the Lamp',
     reference: 'Matthew 6:22-23',
     summary: 'The eye is the lamp of the body — if your eye is healthy, your whole body is full of light, but if it is bad, the whole body is full of darkness.',

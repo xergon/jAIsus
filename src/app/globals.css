@@ -290,3 +290,24 @@ html, body {
 .chat-message-enter {
   animation: messageFade 0.4s ease-out;
 }
+
+/* Accessibility — respect prefers-reduced-motion at the global stylesheet level.
+ * Individual components (SpeakingHint, OnboardingOverlay, Toast, ParableReader,
+ * Skeleton) already gate their own animation work on this media query, but a
+ * dozen utility classes in this file (animate-breathe, animate-pulse-glow,
+ * animate-heart-glow, animate-heart-pulse, ray-beam, halo-glow, particle-float,
+ * voice-bar-listening, voice-bar-speaking, animate-pulse-ring, animate-fade-in,
+ * animate-slide-up, panel-enter, chat-message-enter, animate-breathe-slow)
+ * were running unconditionally. Audit fix: collapse all animation durations
+ * to ~zero for users who opt out. We still apply the animation so layout / opacity
+ * targets land at their `to` values, but the motion is suppressed. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

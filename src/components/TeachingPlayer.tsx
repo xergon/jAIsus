@@ -110,6 +110,7 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
             {TEACHING_TOPICS.map(topic => (
               <button
                 key={topic.id}
+                type="button"
                 onClick={() => generateTeaching(topic.id)}
                 disabled={loading}
                 className={`rounded-full px-3 py-1.5 text-sm font-medium border transition-colors
@@ -141,7 +142,10 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
               </div>
 
               <button
+                type="button"
                 onClick={() => isSpeaking ? onStopSpeaking() : onSpeak(teaching)}
+                aria-pressed={isSpeaking}
+                aria-label={isSpeaking ? 'Stop listening' : 'Listen to teaching'}
                 className={`mt-4 w-full flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-semibold
                   active:scale-[0.98] transition-transform ${
                   isSpeaking

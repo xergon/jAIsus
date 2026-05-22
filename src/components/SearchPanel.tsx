@@ -124,7 +124,10 @@ export function SearchPanel({
 
   const trimmed = debouncedQuery.trim();
   const hasQuery = trimmed.length >= 2;
-  const isDebouncing = query.trim() !== debouncedQuery.trim();
+  // Audit fix: compare untrimmed values. The debounce effect (above) tracks
+  // raw `query`, so a trailing-whitespace edit IS still pending; comparing
+  // trimmed values would say "in sync" and skip the "Searching..." indicator.
+  const isDebouncing = query !== debouncedQuery;
 
   // Audit fix: results were memoized only on [trimmed, hasQuery] — so if a
   // favorite was deleted or a chat thread was cleared while the panel was
@@ -188,6 +191,11 @@ export function SearchPanel({
         isOpen ? 'visible' : 'invisible'
       }`}
       aria-hidden={!isOpen}
+      // Audit fix: `inert` removes the whole subtree from the tab order and
+      // pointer events. Previously the input + buttons stayed tab-reachable
+      // for the 300ms close transition with aria-hidden=true on an ancestor,
+      // which axe-core flags as a serious "aria-hidden-focus" violation.
+      inert={!isOpen}
     >
       {/* Backdrop */}
       <div
