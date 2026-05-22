@@ -61,6 +61,8 @@ export async function POST(req: Request) {
     // leak into Google access logs, intermediate proxies, or our error traces.
     const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
+    // Audit fix: wire req.signal so closing the client mid-request cancels the
+    // upstream Gemini call instead of paying for a response no one waits for.
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -75,21 +77,31 @@ export async function POST(req: Request) {
           ],
         }],
       }),
+      signal: req.signal,
     });
 
     if (!response.ok) {
       const errorBody = await response.text();
-      console.error('Gemini API error:', response.status, errorBody);
+      console.error('Gemini API error:', response.status, errorBody.slice(0, 200));
       // Don't leak upstream error body to client — could expose key fragments, quota details, etc.
       return Response.json({ error: 'Vision analysis failed' }, { status: 500 });
     }
 
     const data = await response.json();
-    const description = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const description = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    // Audit follow-up: when Gemini blocks for SAFETY (promptFeedback.blockReason),
+    // we used to silently return empty — surface a hint so the UI can react.
+    if (!description && data?.promptFeedback?.blockReason) {
+      return Response.json({ description: '', blocked: true });
+    }
     return Response.json({ description });
   } catch (err) {
+    // AbortError = client closed the connection, normal — don't log noise.
+    if ((err as Error)?.name === 'AbortError') {
+      return new Response(null, { status: 499 });
+    }
     const errMsg = err instanceof Error ? err.message : String(err);
-    console.error('Vision API error:', errMsg, err);
+    console.error('Vision API error:', errMsg);
     // Don't leak error details to client
     return Response.json({ error: 'Vision analysis failed' }, { status: 500 });
   }

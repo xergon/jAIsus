@@ -52,6 +52,10 @@ export function useSpeechRecognition(
   const onResultRef = useRef(onResult);
   const lastInterimRef = useRef<string>('');
   const submittedRef = useRef(false);
+  // Audit fix: generation counter so a silence-timer fired from a prior
+  // start() can't submit OLD speech text or call .stop() against the new
+  // recognition. Every start() bumps it; every async callback checks it.
+  const generationRef = useRef(0);
 
   // Keep onResult ref updated without causing re-renders
   useEffect(() => {
@@ -82,6 +86,10 @@ export function useSpeechRecognition(
       return;
     }
 
+    // Bump generation FIRST so any pending timers/handlers from a prior
+    // start() know they've been superseded.
+    const myGen = ++generationRef.current;
+
     // Stop any existing recognition
     try {
       recognitionRef.current?.abort();
@@ -111,6 +119,10 @@ export function useSpeechRecognition(
     function resetSilenceTimer() {
       if (silenceTimer) clearTimeout(silenceTimer);
       silenceTimer = setTimeout(() => {
+        // Audit fix: a rapid double-start would otherwise reset submittedRef
+        // to false on the new start, and the OLD timer (still alive) would
+        // then fire onResultRef with stale text. Gate on generation match.
+        if (myGen !== generationRef.current) return;
         // 2s of silence — submit what we have and stop
         if (!submittedRef.current && accumulatedText.trim()) {
           submittedRef.current = true;
@@ -135,6 +147,7 @@ export function useSpeechRecognition(
     };
 
     recognition.onresult = (event) => {
+      if (myGen !== generationRef.current) return;
       if (submittedRef.current) return;
 
       // Rebuild full transcript from all results
@@ -173,6 +186,7 @@ export function useSpeechRecognition(
 
     recognition.onend = () => {
       if (silenceTimer) clearTimeout(silenceTimer);
+      if (myGen !== generationRef.current) return;
       // If recognition ended without submitting, submit whatever we have
       if (!submittedRef.current && accumulatedText.trim()) {
         const text = accumulatedText.trim();
@@ -197,6 +211,8 @@ export function useSpeechRecognition(
 
   useEffect(() => {
     return () => {
+      // Bump generation so any still-pending silence timer no-ops on fire.
+      generationRef.current++;
       try {
         recognitionRef.current?.abort();
       } catch {

@@ -74,6 +74,9 @@ export function ChatInterface() {
   const prevStatusRef = useRef<string>('ready');
   const activeMessageIdRef = useRef<string | null>(null);
   const lastSpokenTextRef = useRef<string>('');
+  // Audit fix: stash the deferred-recognition-start timer so a rapid double-tap
+  // doesn't stack starts, and unmount cleanup can cancel it.
+  const voiceToggleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sendMessageRef = useRef<any>(null);
 
@@ -348,10 +351,16 @@ export function ChatInterface() {
     }
 
     if (status === 'streaming' && activeMessageIdRef.current !== lastMessage.id) {
-      // Dedup: if the AI SDK replaces the message object with a new ID but same text, don't re-speak
+      // Dedup: if the AI SDK replaces the message object with a new ID but same text, don't re-speak.
+      // Audit fix: previously we set activeMessageIdRef.current = id and returned WITHOUT resetting
+      // spokenLengthRef/queuedSentencesRef. Subsequent streaming tokens then ran the splitter
+      // against the new message's text using the OLD spokenLength offset → wrong chunks queued.
+      // Now: seed spokenLength to the already-spoken text length so further streaming picks up
+      // cleanly from there, and start a fresh queued-sentences set scoped to this new id.
       if (fullText && fullText === lastSpokenTextRef.current) {
         activeMessageIdRef.current = lastMessage.id;
-        // Skip — already spoken this exact text
+        spokenLengthRef.current = fullText.length;
+        queuedSentencesRef.current = new Set();
         prevStatusRef.current = status;
         return;
       }
@@ -454,15 +463,25 @@ export function ChatInterface() {
     if (notifPromptShownRef.current) return;
     if (showOnboarding || showVADPrompt) return;
     if (hasSeenNotificationPrompt()) return;
-    // Count only user-visible messages (skip auto-vision pings starting with '(')
-    const visibleCount = messages.filter((m) => {
-      if (m.role !== 'user') return true;
-      const text = m.parts
-        ?.filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
-        .map((p) => p.text)
-        .join('') ?? '';
-      return !(text.startsWith('(') && text.endsWith(')'));
-    }).length;
+    // Audit fix: previously this filtered all messages on every render —
+    // a long thread would do O(N) work per keystroke. Now we bail early if
+    // even the total message count is below the threshold (it never can be
+    // when filtered count is high enough), and short-circuit the filter
+    // once we've found enough visible messages.
+    if (messages.length < 4) return;
+    let visibleCount = 0;
+    for (const m of messages) {
+      if (m.role !== 'user') {
+        visibleCount++;
+      } else {
+        const text = m.parts
+          ?.filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
+          .map((p) => p.text)
+          .join('') ?? '';
+        if (!(text.startsWith('(') && text.endsWith(')'))) visibleCount++;
+      }
+      if (visibleCount >= 4) break;
+    }
     if (visibleCount < 4) return;
     notifPromptShownRef.current = true;
     setShowNotificationPrompt(true);
@@ -524,6 +543,18 @@ export function ChatInterface() {
     }
   }, [isListening, voiceState, status, startListening, reset]);
 
+  // Cancel any pending voice-toggle deferred-start on unmount so the timer
+  // doesn't fire `startRecognition` on a stale closure after the component
+  // is gone. Audit fix.
+  useEffect(() => {
+    return () => {
+      if (voiceToggleTimerRef.current) {
+        clearTimeout(voiceToggleTimerRef.current);
+        voiceToggleTimerRef.current = null;
+      }
+    };
+  }, []);
+
   function handleTextSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!input.trim() || status !== 'ready') return;
@@ -548,7 +579,14 @@ export function ChatInterface() {
     } else if (voiceState === 'speaking' || isSpeaking) {
       stopSpeaking();
       reset();
-      setTimeout(() => startRecognition(), 150);
+      // Audit fix: clear any prior pending toggle-timer so a rapid double-tap
+      // doesn't stack handle-recognition starts. Also store the handle in a
+      // ref so the unmount cleanup can cancel it.
+      if (voiceToggleTimerRef.current) clearTimeout(voiceToggleTimerRef.current);
+      voiceToggleTimerRef.current = setTimeout(() => {
+        voiceToggleTimerRef.current = null;
+        startRecognition();
+      }, 150);
     } else {
       startRecognition();
     }

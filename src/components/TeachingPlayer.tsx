@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { TEACHING_TOPICS } from '@/lib/constants';
 import { useModalA11y } from '@/hooks/useModalA11y';
 import { SkeletonCard } from '@/components/Skeleton';
@@ -22,8 +22,31 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
   const [selectedTopic, setSelectedTopic] = useState('');
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalA11y({ isOpen, onClose, ref: dialogRef });
+  // Audit fix: track in-flight fetch so closing the modal cancels it instead
+  // of letting the response resolve into a setState on an unmounted modal.
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Abort any in-flight generation when the modal closes.
+  useEffect(() => {
+    if (!isOpen) {
+      abortRef.current?.abort();
+      abortRef.current = null;
+    }
+  }, [isOpen]);
+
+  // Cancel on unmount too.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+  }, []);
 
   async function generateTeaching(topic: string) {
+    // Cancel a prior in-flight request (rapid topic switching).
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setSelectedTopic(topic);
     setLoading(true);
     setTeaching('');
@@ -33,6 +56,7 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         // Could be 429 (rate limit) or 400 (invalid topic) — surface generic message
@@ -48,10 +72,13 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
         setTeaching('Unable to generate teaching at this time. Please try again.');
         toast.error('Could not generate teaching right now.');
       }
-    } catch {
+    } catch (err) {
+      // AbortError = user closed the modal; not an error to surface.
+      if ((err as Error)?.name === 'AbortError') return;
       setTeaching('Unable to generate teaching at this time. Please try again.');
       toast.error('Could not generate teaching right now.');
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
     }
   }

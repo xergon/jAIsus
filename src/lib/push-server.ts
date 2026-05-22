@@ -29,25 +29,31 @@ const STORE_PATH = process.env.PUSH_STORE_PATH || '/tmp/jaisus-push.json';
 
 /** Map keyed by subscription.endpoint (a URL guaranteed unique per device). */
 const subscriptions = new Map<string, PushSubscriptionJSON>();
-let loaded = false;
+// Audit fix: previously a boolean `loaded` flag was set to true BEFORE the
+// async readFile resolved. A second concurrent call would see `loaded=true`
+// and proceed with an empty Map. We now cache the in-flight promise so all
+// concurrent callers await the same load.
+let loadPromise: Promise<void> | null = null;
 
-async function loadFromDisk(): Promise<void> {
-  if (loaded) return;
-  loaded = true;
-  try {
-    const raw = await fs.readFile(STORE_PATH, 'utf8');
-    const parsed = JSON.parse(raw) as PushSubscriptionJSON[];
-    if (Array.isArray(parsed)) {
-      for (const sub of parsed) {
-        if (sub && typeof sub.endpoint === 'string') {
-          subscriptions.set(sub.endpoint, sub);
+function loadFromDisk(): Promise<void> {
+  if (loadPromise) return loadPromise;
+  loadPromise = (async () => {
+    try {
+      const raw = await fs.readFile(STORE_PATH, 'utf8');
+      const parsed = JSON.parse(raw) as PushSubscriptionJSON[];
+      if (Array.isArray(parsed)) {
+        for (const sub of parsed) {
+          if (sub && typeof sub.endpoint === 'string') {
+            subscriptions.set(sub.endpoint, sub);
+          }
         }
       }
+    } catch {
+      // Missing file (first run) or corrupted JSON — start empty. The next
+      // mutation will rewrite the file with a valid array.
     }
-  } catch {
-    // Missing file (first run) or corrupted JSON — start empty. The next
-    // mutation will rewrite the file with a valid array.
-  }
+  })();
+  return loadPromise;
 }
 
 async function persistToDisk(): Promise<void> {

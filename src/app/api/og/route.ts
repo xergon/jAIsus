@@ -20,7 +20,7 @@
  */
 import { ImageResponse } from 'next/og';
 import { createElement, type CSSProperties, type ReactElement } from 'react';
-import { clientKey, rateLimit, rateLimitResponse } from '@/lib/rate-limit';
+import { clientKey, rateLimitAsync, rateLimitResponse } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
 export const contentType = 'image/png';
@@ -437,7 +437,10 @@ const CACHE_HEADERS = {
 } as const;
 
 export async function GET(req: Request): Promise<Response> {
-  const rl = rateLimit(`og:${clientKey(req)}`, OG_LIMIT);
+  // Audit fix: edge runtime is per-isolate, so in-memory rateLimit() doesn't
+  // persist effectively across requests. Use the Upstash-backed async variant
+  // so crawler bots can't bypass the cap by spreading load across isolates.
+  const rl = await rateLimitAsync(`og:${clientKey(req)}`, OG_LIMIT);
   if (!rl.ok) return rateLimitResponse(rl);
 
   try {

@@ -126,11 +126,43 @@ export function SearchPanel({
   const hasQuery = trimmed.length >= 2;
   const isDebouncing = query.trim() !== debouncedQuery.trim();
 
-  // Run the search. searchAll() reads localStorage fresh every call so we
-  // get current data without subscribing.
+  // Audit fix: results were memoized only on [trimmed, hasQuery] — so if a
+  // favorite was deleted or a chat thread was cleared while the panel was
+  // open, the displayed results would point at items that no longer exist.
+  // We now bump a `storageTick` whenever a relevant store changes so the
+  // useMemo re-derives. searchAll() already reads localStorage fresh.
+  const [storageTick, setStorageTick] = useState(0);
+  useEffect(() => {
+    if (!isOpen) return;
+    if (typeof window === 'undefined') return;
+    const bump = () => setStorageTick((t) => t + 1);
+    const onStorage = (e: StorageEvent) => {
+      const key = e.key;
+      if (
+        key === null ||
+        key === 'jaisus-favorites' ||
+        key === 'jaisus-chat-history' ||
+        key === 'jaisus-voice-memos'
+      ) {
+        bump();
+      }
+    };
+    window.addEventListener('jaisus-favorites-changed', bump);
+    window.addEventListener('jaisus-chat-history-changed', bump);
+    window.addEventListener('jaisus-voice-memos-changed', bump);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('jaisus-favorites-changed', bump);
+      window.removeEventListener('jaisus-chat-history-changed', bump);
+      window.removeEventListener('jaisus-voice-memos-changed', bump);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [isOpen]);
+
   const results: SearchResult[] = useMemo(
     () => (hasQuery ? searchAll(trimmed) : []),
-    [trimmed, hasQuery]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [trimmed, hasQuery, storageTick]
   );
 
   const handleSelect = (result: SearchResult) => {

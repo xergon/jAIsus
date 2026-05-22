@@ -42,11 +42,16 @@ export function PersonalitySwitcher({
     const refresh = () => setCustomList(listCustomPersonalities());
     refresh();
     if (typeof window === 'undefined') return;
+    // Audit fix: filter `storage` event by key — unrelated localStorage
+    // mutations shouldn't re-render the switcher every time.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'jaisus-custom-personalities' || e.key === null) refresh();
+    };
     window.addEventListener(CUSTOM_CHANGED_EVENT, refresh);
-    window.addEventListener('storage', refresh);
+    window.addEventListener('storage', onStorage);
     return () => {
       window.removeEventListener(CUSTOM_CHANGED_EVENT, refresh);
-      window.removeEventListener('storage', refresh);
+      window.removeEventListener('storage', onStorage);
     };
   }, []);
 

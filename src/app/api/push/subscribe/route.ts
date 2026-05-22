@@ -20,8 +20,16 @@ export const dynamic = 'force-dynamic';
 // to keep a scripted attacker from filling /tmp/jaisus-push.json.
 const SUBSCRIBE_LIMIT = { capacity: 10, refillRatePerSec: 10 / 60 };
 
-function isBase64Like(s: unknown): s is string {
-  if (typeof s !== 'string' || s.length === 0) return false;
+// Hard caps so a malicious client can't fill /tmp/jaisus-push.json with a
+// multi-megabyte endpoint URL or key blob. Real values: endpoint ~150-500
+// chars, p256dh ~88 chars, auth ~24 chars. The caps below leave generous
+// headroom for vendor-specific URLs (FCM tokens can be ~200 chars) but
+// reject obvious junk.
+const MAX_ENDPOINT_LENGTH = 2048;
+const MAX_KEY_LENGTH = 256;
+
+function isBase64Like(s: unknown, maxLength: number): s is string {
+  if (typeof s !== 'string' || s.length === 0 || s.length > maxLength) return false;
   // Browsers emit either pure base64 (with +/= chars) OR pure base64url
   // (with -_ chars). Mixing the two alphabets in the same string is a
   // signal of corruption/injection — that string can't possibly decode to
@@ -35,13 +43,17 @@ function isBase64Like(s: unknown): s is string {
 function isValidSubscription(value: unknown): value is PushSubscriptionJSON {
   if (!value || typeof value !== 'object') return false;
   const sub = value as Record<string, unknown>;
-  if (typeof sub.endpoint !== 'string' || !sub.endpoint.startsWith('https://')) {
+  if (
+    typeof sub.endpoint !== 'string' ||
+    !sub.endpoint.startsWith('https://') ||
+    sub.endpoint.length > MAX_ENDPOINT_LENGTH
+  ) {
     return false;
   }
   const keys = sub.keys;
   if (!keys || typeof keys !== 'object') return false;
   const k = keys as Record<string, unknown>;
-  return isBase64Like(k.p256dh) && isBase64Like(k.auth);
+  return isBase64Like(k.p256dh, MAX_KEY_LENGTH) && isBase64Like(k.auth, MAX_KEY_LENGTH);
 }
 
 export async function POST(req: Request) {

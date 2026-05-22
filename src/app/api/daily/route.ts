@@ -30,6 +30,10 @@ interface ReflectionCacheEntry {
 
 // Module-level cache survives across requests on the same function instance.
 const reflectionCache = new Map<string, ReflectionCacheEntry>();
+// Audit fix: in-flight dedupe so a cold instance hit by concurrent requests
+// doesn't call Claude N times for the same verse. The first request creates
+// the promise; subsequent requests await the same one.
+const inflightReflections = new Map<string, Promise<string>>();
 
 const SYSTEM_PROMPT =
   'You are jAIsus. Given a scripture verse, write ONE warm reflection question someone could sit with today. Maximum 20 words. No preamble, no quotes, just the question.';
@@ -49,25 +53,34 @@ export async function GET(req: Request) {
     reflection = hit.question;
     cached = true;
   } else {
-    try {
-      const { text } = await generateText({
-        model: anthropic('claude-haiku-4-5-20251001'),
-        system: SYSTEM_PROMPT,
-        prompt: `${verse.text} — ${verse.reference}`,
-        maxOutputTokens: 60,
-      });
-      reflection = text.trim();
-      if (reflection) {
-        reflectionCache.set(verse.id, {
-          question: reflection,
-          expires: now + TTL_MS,
-        });
-      }
-    } catch {
-      // Swallow LLM errors — still return the verse so the client can render.
-      reflection = '';
-      cached = false;
+    // Coalesce concurrent cold-cache requests into one upstream call.
+    let pending = inflightReflections.get(verse.id);
+    if (!pending) {
+      pending = (async () => {
+        try {
+          const { text } = await generateText({
+            model: anthropic('claude-haiku-4-5-20251001'),
+            system: SYSTEM_PROMPT,
+            prompt: `${verse.text} — ${verse.reference}`,
+            maxOutputTokens: 60,
+          });
+          const trimmed = text.trim();
+          if (trimmed) {
+            reflectionCache.set(verse.id, {
+              question: trimmed,
+              expires: Date.now() + TTL_MS,
+            });
+          }
+          return trimmed;
+        } catch {
+          return '';
+        } finally {
+          inflightReflections.delete(verse.id);
+        }
+      })();
+      inflightReflections.set(verse.id, pending);
     }
+    reflection = await pending;
   }
 
   return new Response(

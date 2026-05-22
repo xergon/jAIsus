@@ -88,15 +88,22 @@ export function SavedMemosPanel({
   const [now, setNow] = useState<number>(() => Date.now());
 
   // Hydrate + subscribe. Empty initial state matches SSR.
+  // Audit fix: the `storage` event fires for ANY localStorage key change
+  // (favorites, voice-id, etc.). Filter to just our key so unrelated
+  // mutations don't trigger needless work + re-renders.
   useEffect(() => {
     const refresh = () => setMemos(listVoiceMemos());
     refresh();
     if (typeof window === 'undefined') return;
+    const onStorage = (e: StorageEvent) => {
+      // `e.key === null` happens on localStorage.clear() — refresh in that case too.
+      if (e.key === 'jaisus-voice-memos' || e.key === null) refresh();
+    };
     window.addEventListener(MEMOS_CHANGED_EVENT, refresh);
-    window.addEventListener('storage', refresh);
+    window.addEventListener('storage', onStorage);
     return () => {
       window.removeEventListener(MEMOS_CHANGED_EVENT, refresh);
-      window.removeEventListener('storage', refresh);
+      window.removeEventListener('storage', onStorage);
     };
   }, []);
 

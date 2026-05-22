@@ -23,7 +23,9 @@ export async function POST(req: Request) {
     return Response.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  if (typeof body.text !== 'string' || body.text.length === 0) {
+  // Trim before checking — a single space is also "empty" for billing purposes
+  // and shouldn't reach ElevenLabs.
+  if (typeof body.text !== 'string' || body.text.trim().length === 0) {
     return Response.json({ error: 'text is required' }, { status: 400 });
   }
 
@@ -44,25 +46,37 @@ export async function POST(req: Request) {
       ? body.voiceId
       : DEFAULT_VOICE_ID;
 
-  const response = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${selectedVoice}`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'xi-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        text,
-        model_id: ELEVENLABS_MODEL_ID,
-        voice_settings: TTS_SETTINGS,
-      }),
+  // Audit fix: wire req.signal so closing the client mid-stream cancels the
+  // upstream ElevenLabs request — they bill per character even after disconnect.
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${selectedVoice}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          text,
+          model_id: ELEVENLABS_MODEL_ID,
+          voice_settings: TTS_SETTINGS,
+        }),
+        signal: req.signal,
+      }
+    );
+  } catch (err) {
+    if ((err as Error)?.name === 'AbortError') {
+      return new Response(null, { status: 499 }); // nginx-style client-closed-request
     }
-  );
+    console.error('ElevenLabs fetch error:', err instanceof Error ? err.message : String(err));
+    return Response.json({ error: 'TTS generation failed' }, { status: 502 });
+  }
 
   if (!response.ok) {
     const error = await response.text();
-    console.error('ElevenLabs error:', response.status, error);
+    console.error('ElevenLabs error:', response.status, error.slice(0, 200));
     return Response.json({ error: 'TTS generation failed' }, { status: 500 });
   }
 

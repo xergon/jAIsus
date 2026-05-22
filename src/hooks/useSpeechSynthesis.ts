@@ -111,6 +111,14 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
   const queueRef = useRef<string[]>([]);
   const queueActiveRef = useRef(false);
   const streamDoneRef = useRef(false);
+  // Audit fix: playback generation counter so a stop() during an in-flight
+  // playOneSentence can short-circuit the pending promise immediately rather
+  // than waiting for the 30s safety timeout. Every stop() bumps it.
+  const playbackGenRef = useRef(0);
+  // Refs to currently-pending playOneSentence resolvers so stop() can
+  // force-resolve them. Multiple may be queued (queueActiveRef serializes
+  // but the audio.onended callback can race with stop()).
+  const pendingResolversRef = useRef<Set<() => void>>(new Set());
   // Track every blob URL we create so we can revoke them all on stop/unmount.
   // Without this, stop() leaves blob URLs orphaned in memory until the next
   // play cycle's onended/onerror fires (which it won't, because handlers are
@@ -143,6 +151,9 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
   }, []);
 
   const stop = useCallback(() => {
+    // Bump playback generation FIRST so any in-flight playOneSentence
+    // detects the cancellation on its next checkpoint.
+    playbackGenRef.current++;
     abortRef.current?.abort();
     // Clear the sentence queue
     queueRef.current = [];
@@ -153,6 +164,14 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       audioRef.current.currentTime = 0;
       // Do NOT clear src — preserves warm audio's autoplay privilege
       audioRef.current = null;
+    }
+    // Force-resolve every pending playOneSentence promise so processQueue
+    // exits the await immediately instead of waiting for the 30s safety
+    // timeout (audit fix).
+    const pending = Array.from(pendingResolversRef.current);
+    pendingResolversRef.current.clear();
+    for (const resolve of pending) {
+      try { resolve(); } catch { /* */ }
     }
     // Revoke ALL outstanding blob URLs to prevent leaks
     activeBlobUrlsRef.current.forEach(url => {
@@ -280,6 +299,9 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
 
   const playOneSentence = useCallback(async (sentence: string): Promise<boolean> => {
     unlockAudio();
+    // Snapshot the playback generation at entry — if stop() bumps it during
+    // any await, we bail before the next audio.play().
+    const myGen = playbackGenRef.current;
     try {
       const controller = new AbortController();
       abortRef.current = controller;
@@ -289,23 +311,36 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
         body: JSON.stringify({ text: sentence, voiceId: getStoredVoiceId() }),
         signal: controller.signal,
       });
+      if (myGen !== playbackGenRef.current) return false;
       if (!response.ok) return false;
       const blob = await response.blob();
+      if (myGen !== playbackGenRef.current) return false;
       if (blob.size < 100) return false;
 
       const blobUrl = URL.createObjectURL(blob);
       trackBlobUrl(blobUrl);
       return new Promise<boolean>((resolve) => {
         let resolved = false;
+        // Register a force-stop hook so stop() can short-circuit this promise
+        // synchronously rather than waiting on the 30s safety timeout.
+        const forceStop = () => done(false);
+        pendingResolversRef.current.add(forceStop);
         const done = (ok: boolean) => {
           if (resolved) return;
           resolved = true;
+          pendingResolversRef.current.delete(forceStop);
           clearTimeout(safetyTimeout);
           // Delay blob revocation so stale events don't fire errors on the audio element
           setTimeout(() => releaseBlobUrl(blobUrl), 500);
           audioRef.current = null;
           resolve(ok);
         };
+
+        // If stop() already fired during the awaits above, resolve immediately.
+        if (myGen !== playbackGenRef.current) {
+          done(false);
+          return;
+        }
 
         // Safety: if audio never fires onended/onerror, resolve after 30s
         const safetyTimeout = setTimeout(() => done(false), 30000);
@@ -354,9 +389,16 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
     queueActiveRef.current = true;
     setIsSpeaking(true);
     console.log('processQueue: started');
+    // Snapshot generation so stop() bumps it and we exit on next loop iteration.
+    const myGen = playbackGenRef.current;
 
     try {
       while (true) {
+        // Audit: bail immediately if stop() was called.
+        if (myGen !== playbackGenRef.current) {
+          console.log('processQueue: stop() bumped generation, exiting');
+          break;
+        }
         if (queueRef.current.length > 0) {
           const sentence = queueRef.current.shift()!;
           console.log('processQueue: playing sentence:', sentence.slice(0, 50));

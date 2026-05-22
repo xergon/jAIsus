@@ -68,17 +68,22 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
   const [list, setList] = useState<CustomPersonality[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
-  // Hydrate list on open + subscribe to cross-tab changes
+  // Hydrate list on open + subscribe to cross-tab changes.
+  // Audit fix: filter the `storage` event by key so unrelated localStorage
+  // mutations (e.g. favorites, voice-memos) don't trigger needless refresh.
   useEffect(() => {
     if (!isOpen) return;
     setList(listCustomPersonalities());
     if (typeof window === 'undefined') return;
     const refresh = () => setList(listCustomPersonalities());
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'jaisus-custom-personalities' || e.key === null) refresh();
+    };
     window.addEventListener('jaisus-custom-personalities-changed', refresh);
-    window.addEventListener('storage', refresh);
+    window.addEventListener('storage', onStorage);
     return () => {
       window.removeEventListener('jaisus-custom-personalities-changed', refresh);
-      window.removeEventListener('storage', refresh);
+      window.removeEventListener('storage', onStorage);
     };
   }, [isOpen]);
 
