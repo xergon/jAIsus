@@ -31,7 +31,14 @@ export function useChatHistory() {
 
   const clearHistory = useCallback(() => {
     if (typeof window === 'undefined') return;
-    localStorage.removeItem(STORAGE_KEY);
+    // Audit fix: localStorage.removeItem can throw in private mode / under
+    // quota errors — match the other handlers' guarded pattern so clearing
+    // doesn't surface as an uncaught exception.
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // Storage unavailable
+    }
   }, []);
 
   return { loadMessages, saveMessages, clearHistory };

@@ -28,7 +28,7 @@ export function DailyKindness({ className = '' }: DailyKindnessProps) {
           className="flex-shrink-0 w-8 h-8 rounded-full bg-white border border-teal-200 flex items-center justify-center text-base leading-none"
           aria-hidden="true"
         >
-          <span role="img" aria-hidden="true">🌱</span>
+          <span aria-hidden="true">🌱</span>
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2 mb-1">

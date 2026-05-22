@@ -263,7 +263,7 @@ export function FavoritesPanel({
                           type="button"
                           onClick={() => removeFavorite(fav.id)}
                           aria-label="Remove from favorites"
-                          className="w-8 h-8 flex items-center justify-center rounded-full text-stone-400 hover:text-rose-600 hover:bg-rose-50 active:scale-[0.95] transition-all"
+                          className="w-11 h-11 flex items-center justify-center rounded-full text-stone-500 hover:text-rose-600 hover:bg-rose-50 active:scale-[0.95] transition-all"
                         >
                           <svg
                             className="w-4 h-4"
@@ -284,7 +284,7 @@ export function FavoritesPanel({
                             type="button"
                             onClick={() => handleAskAgain(fav.content)}
                             aria-label="Ask jAIsus about this again"
-                            className="w-8 h-8 flex items-center justify-center rounded-full text-stone-400 hover:text-teal-600 hover:bg-teal-50 active:scale-[0.95] transition-all"
+                            className="w-11 h-11 flex items-center justify-center rounded-full text-stone-500 hover:text-teal-600 hover:bg-teal-50 active:scale-[0.95] transition-all"
                           >
                             <svg
                               className="w-4 h-4"

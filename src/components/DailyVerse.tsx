@@ -25,7 +25,7 @@ export function DailyVerse({ className = '' }: DailyVerseProps) {
           className="flex-shrink-0 w-8 h-8 rounded-full bg-amber-50 border border-amber-100 flex items-center justify-center text-base leading-none"
           aria-hidden="true"
         >
-          <span role="img" aria-hidden="true">📖</span>
+          <span aria-hidden="true">📖</span>
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 mb-1">

@@ -75,11 +75,13 @@ export function useModalA11y({ isOpen, onClose, ref }: UseModalA11yOptions) {
 
     return () => {
       releaseScrollLock();
-      // Restore focus only if the previously-focused element is still in the DOM —
-      // otherwise focus() throws or silently focuses the body, breaking keyboard
-      // flow for the next modal.
+      // Restore focus only if the previously-focused element is still in the
+      // DOM AND reachable. Audit fix: previously we restored to anything
+      // that was `isConnected`, but if that element now sits inside an
+      // aria-hidden / inert / hidden subtree (e.g. another modal is still
+      // open above), the focus lands somewhere screen readers can't see.
       const prev = previouslyFocusedRef.current;
-      if (prev && prev.isConnected) {
+      if (prev && prev.isConnected && isReachable(prev)) {
         prev.focus?.();
       }
     };
@@ -127,6 +129,28 @@ export function useModalA11y({ isOpen, onClose, ref }: UseModalA11yOptions) {
   }, [isOpen, onClose, ref]);
 }
 
+/**
+ * Returns true if `el` is currently reachable by a screen reader / keyboard —
+ * i.e. not inside an aria-hidden / inert / hidden subtree, and laid out.
+ * Audit fix: the simpler `el.offsetParent !== null` check returns false for
+ * `position: fixed` descendants in Safari, which silently excludes legitimate
+ * focus targets. `getClientRects().length > 0` is the cross-browser-correct
+ * visibility check.
+ */
+function isReachable(el: HTMLElement): boolean {
+  if (el.getClientRects().length === 0) return false;
+  // Walk ancestors looking for aria-hidden="true" / inert / hidden.
+  let node: HTMLElement | null = el;
+  while (node) {
+    if (node.hasAttribute('hidden')) return false;
+    if (node.getAttribute('aria-hidden') === 'true') return false;
+    // `inert` is a boolean attribute — its presence (any value) means inert.
+    if (node.hasAttribute('inert')) return false;
+    node = node.parentElement;
+  }
+  return true;
+}
+
 /** Returns all visible, tab-focusable descendants of `root` in DOM order. */
 function getFocusable(root: HTMLElement): HTMLElement[] {
   const selector = [
@@ -137,7 +161,5 @@ function getFocusable(root: HTMLElement): HTMLElement[] {
     'select:not([disabled])',
     '[tabindex]:not([tabindex="-1"])',
   ].join(',');
-  return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(
-    el => !el.hasAttribute('aria-hidden') && el.offsetParent !== null
-  );
+  return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(isReachable);
 }

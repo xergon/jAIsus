@@ -136,6 +136,13 @@ export function useCamera(): UseCameraResult {
       return;
     }
 
+    // Audit fix: in-flight guard against rapid double-tap on the toggle
+    // button. Without this, two near-simultaneous calls each call
+    // getUserMedia in parallel — the generation guard saves one, the other
+    // installs a second stream that overwrites streamRef.current and
+    // orphans the first track set.
+    if (streamRef.current || activeRef.current) return;
+
     // Capture generation before awaiting — if stopCamera/unmount bumps the
     // generation before getUserMedia resolves, we must NOT install the stream.
     const gen = generationRef.current;
@@ -226,6 +233,13 @@ export function useCamera(): UseCameraResult {
       if (firstFrameTimeoutRef.current) clearTimeout(firstFrameTimeoutRef.current);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      // Audit fix: null out the video element's srcObject so the DOM node
+      // doesn't keep a stale MediaStream reference after unmount (matters
+      // for Fast Refresh / portal-remount paths).
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
       }
     };
   }, []);

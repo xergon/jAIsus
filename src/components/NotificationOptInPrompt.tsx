@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useModalA11y } from '@/hooks/useModalA11y';
 import { usePushSubscription } from '@/hooks/usePushSubscription';
 
@@ -55,6 +55,14 @@ export function NotificationOptInPrompt({
 }: NotificationOptInPromptProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const { subscribe } = usePushSubscription();
+  // Audit fix: track mount so handleAccept's awaited subscribe() can't fire
+  // callbacks on a stale parent (e.g. modal closed while the browser's
+  // permission prompt is still pending).
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useModalA11y({
     isOpen,
@@ -75,6 +83,7 @@ export function NotificationOptInPrompt({
   const handleAccept = async () => {
     markNotificationPromptSeen();
     const result = await subscribe();
+    if (!mountedRef.current) return;
     if (result.ok) {
       onAccepted?.();
     } else {

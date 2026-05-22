@@ -113,9 +113,16 @@ export function ContextMenu({
   // CSS transition runs.
   const [animateIn, setAnimateIn] = useState(false);
 
-  // Reset slot array length to match items every render so stale refs from
-  // a previous, longer items array don't leak.
-  itemRefs.current.length = items.length;
+  // Audit fix: mutating refs during render violates React 19's render-purity
+  // contract — under StrictMode / concurrent rendering, a discarded render
+  // pass would leave the ref array out of sync with the committed tree.
+  // Move the length sync into an effect that runs after commit, so the ref
+  // callback at the button below always sees the right length.
+  useEffect(() => {
+    if (itemRefs.current.length !== items.length) {
+      itemRefs.current.length = items.length;
+    }
+  }, [items.length]);
 
   // Measure & clamp the menu's position once it's in the DOM. We use
   // useLayoutEffect so the position is applied before the user sees the
@@ -266,6 +273,7 @@ export function ContextMenu({
       <div
         ref={menuRef}
         role="menu"
+        aria-label="Message actions"
         aria-orientation="vertical"
         // We position absolutely against the fixed backdrop. `coords` is null
         // on the first frame (we render off-screen to measure), then we snap
@@ -295,7 +303,7 @@ export function ContextMenu({
               role="menuitem"
               onClick={() => handleItemActivate(item)}
               className={[
-                'w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left',
+                'w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left min-h-[44px]',
                 'focus:outline-none',
                 destructive
                   ? 'text-rose-600 hover:bg-rose-50 active:bg-rose-100 focus-visible:bg-rose-50'

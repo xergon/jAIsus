@@ -172,8 +172,11 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
     }
 
     // Initialize: A plays, B is empty. Hide until first frame is decoded.
-    va.src = videos[0];
-    va.load();
+    // Audit fix: attach the reveal listeners BEFORE setting src + calling
+    // load(). On a warm HTTP cache, loadeddata / canplay can fire synchronously
+    // from load(), so attaching after would miss the events and the safety
+    // interval (500ms tick) would handle reveal — adding 500ms-2s of delay
+    // to the initial paint.
     va.style.visibility = 'hidden';
     vb.style.visibility = 'hidden';
     releaseVideo(vb);
@@ -210,6 +213,11 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
     va.addEventListener('resize', revealVideo);
     va.addEventListener('loadeddata', revealVideo);
     va.addEventListener('canplay', revealVideo);
+
+    // NOW kick off the load — listeners are in place to catch even the
+    // synchronous events that fire on a cache hit.
+    va.src = videos[0];
+    va.load();
 
     // Safety: only reveal if dimensions are actually ready.
     // Previous version revealed even with videoWidth===0, which caused the

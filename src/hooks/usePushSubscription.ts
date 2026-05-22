@@ -10,7 +10,7 @@
  * return the result so callers can react (e.g., dismiss a modal on success).
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   getCurrentSubscription,
   getPermissionState,
@@ -42,6 +42,15 @@ export function usePushSubscription(): UsePushSubscriptionState {
   );
   const [subscription, setSubscription] = useState<PushSubscription | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Audit fix: track mount state so subscribe()/unsubscribe() resolving after
+  // a parent unmount (e.g. modal closed while the browser permission prompt
+  // is still open) don't call setState on a torn-down hook. Holding the
+  // subscription object in a setState slot post-unmount also delays GC.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Initial probe — runs once after hydration so we don't desync SSR HTML.
   useEffect(() => {
@@ -65,6 +74,7 @@ export function usePushSubscription(): UsePushSubscriptionState {
   const subscribe = useCallback(async () => {
     setError(null);
     const result = await requestPermissionAndSubscribe();
+    if (!mountedRef.current) return result;
     // Refresh derived state regardless of outcome — permission may have flipped
     // to 'denied' even if subscription didn't happen.
     setPermission(getPermissionState());
@@ -79,6 +89,7 @@ export function usePushSubscription(): UsePushSubscriptionState {
   const unsubscribe = useCallback(async () => {
     setError(null);
     const ok = await unsubscribeLib();
+    if (!mountedRef.current) return ok;
     if (ok) setSubscription(null);
     return ok;
   }, []);
