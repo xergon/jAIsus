@@ -53,7 +53,7 @@ export function EmptyState({
         <button
           type="button"
           onClick={action.onClick}
-          className="mt-5 rounded-xl bg-teal-500 px-4 py-2.5 text-sm font-medium text-white active:scale-[0.98] transition-transform"
+          className="mt-5 min-h-[44px] rounded-xl bg-teal-500 px-4 py-2.5 text-sm font-medium text-white active:scale-[0.98] transition-transform"
         >
           {action.label}
         </button>

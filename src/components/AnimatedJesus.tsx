@@ -184,6 +184,28 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
     currentIndexRef.current = 0;
     preloadedRef.current = false;
 
+    // Audit fix: track every setTimeout spawned inside this effect so the
+    // cleanup can clear them. Without this, late-firing timeouts (the
+    // play-retry fallbacks and the swap delay) can call setState or
+    // releaseVideo on torn-down elements after unmount.
+    const pendingTimeouts: Array<ReturnType<typeof setTimeout>> = [];
+    const trackTimeout = (cb: () => void, ms: number): ReturnType<typeof setTimeout> => {
+      const id = setTimeout(() => {
+        const i = pendingTimeouts.indexOf(id);
+        if (i !== -1) pendingTimeouts.splice(i, 1);
+        cb();
+      }, ms);
+      pendingTimeouts.push(id);
+      return id;
+    };
+
+    // Audit fix: bound onError → swapToNext recursion. If every video errors
+    // immediately on load (e.g. all assets 404), onError fires synchronously
+    // from swapToNext which calls swapToNext again — stack overflow. Bail
+    // after N consecutive errors and let the safety interval catch the case.
+    let consecutiveErrorCount = 0;
+    const MAX_CONSECUTIVE_ERRORS = 8;
+
     let revealed = false;
     function revealVideo() {
       if (revealed || !va) return;
@@ -245,7 +267,7 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
 
     va.play().catch(() => {
       // Autoplay blocked — wait a beat then reveal the still frame
-      setTimeout(revealVideo, 300);
+      trackTimeout(revealVideo, 300);
     });
 
     /** Pick the best video index for the current emotion */
@@ -261,10 +283,18 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
       return (currentIndexRef.current + 1) % videos.length;
     }
 
+    // Track which video index was loaded into the "next" slot during preload,
+    // so swapToNext can detect if the user's emotion changed between preload
+    // (at 80% of current clip) and the actual swap (at clip end). Without
+    // this, swapToNext would play whatever was preloaded even though the
+    // emotion may now want a different video.
+    let preloadedIdx = -1;
+
     function preloadNext() {
       if (videos.length <= 1 || preloadedRef.current) return;
       preloadedRef.current = true;
       const nextIdx = pickEmotionVideo();
+      preloadedIdx = nextIdx;
       const next = getNext();
       next.src = videos[nextIdx];
       next.load();
@@ -278,20 +308,25 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
       const next = getNext();
       const current = getActive();
 
-      // If next wasn't preloaded, load it now
-      if (!preloadedRef.current) {
+      // If next wasn't preloaded — or it was preloaded with a different
+      // emotion's video (user's emotion changed between preload @ 80% and
+      // the swap) — (re)load the correct source now. Audit fix: previously
+      // we trusted preloadedRef.current alone and could play the wrong clip.
+      if (!preloadedRef.current || preloadedIdx !== currentIndexRef.current) {
         next.src = videos[currentIndexRef.current];
         next.load();
       }
+      preloadedIdx = -1;
 
       // Show next, hide current — instant swap
       next.style.visibility = 'visible';
       next.play().catch(() => {
-        setTimeout(() => { if (mountedRef.current) next.play().catch(() => {}); }, 300);
+        trackTimeout(() => { if (mountedRef.current) next.play().catch(() => {}); }, 300);
       });
 
       // Hide and release old one after a tiny delay (lets the new one render first)
-      setTimeout(() => {
+      trackTimeout(() => {
+        if (!mountedRef.current) return;
         current.style.visibility = 'hidden';
         releaseVideo(current);
       }, 50);
@@ -326,7 +361,19 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
 
     function onError(this: HTMLVideoElement) {
       console.warn('Video error, skipping');
+      // Audit fix: bound the swap-on-error recursion. If every video fails,
+      // synchronous onError → swapToNext → onError chains until stack overflow.
+      consecutiveErrorCount++;
+      if (consecutiveErrorCount > MAX_CONSECUTIVE_ERRORS) {
+        console.warn('Too many consecutive video errors — falling back to canvas');
+        if (mountedRef.current) setMode('canvas');
+        return;
+      }
       if (this === getActive()) swapToNext();
+    }
+    // Reset the consecutive-error counter when a video successfully plays.
+    function onPlaying(this: HTMLVideoElement) {
+      if (this === getActive()) consecutiveErrorCount = 0;
     }
 
     function onVisibilityChange() {
@@ -363,17 +410,25 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
     vb.addEventListener('ended', onEnded);
     va.addEventListener('error', onError);
     vb.addEventListener('error', onError);
+    va.addEventListener('playing', onPlaying);
+    vb.addEventListener('playing', onPlaying);
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
       clearInterval(stallWatchdog);
       clearInterval(safetyInterval);
+      // Audit fix: clear every tracked setTimeout so late-firing callbacks
+      // don't touch torn-down elements / call setState after unmount.
+      for (const t of pendingTimeouts) clearTimeout(t);
+      pendingTimeouts.length = 0;
       va.removeEventListener('timeupdate', onTimeUpdate);
       vb.removeEventListener('timeupdate', onTimeUpdate);
       va.removeEventListener('ended', onEnded);
       vb.removeEventListener('ended', onEnded);
       va.removeEventListener('error', onError);
       vb.removeEventListener('error', onError);
+      va.removeEventListener('playing', onPlaying);
+      vb.removeEventListener('playing', onPlaying);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       releaseVideo(va);
       releaseVideo(vb);

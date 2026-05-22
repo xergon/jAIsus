@@ -58,6 +58,29 @@ export interface SubscribeResult {
 }
 
 /**
+ * Audit fix: concurrent-call lock. Two simultaneous calls (e.g. a double
+ * click before the first render commits) both hit Notification.requestPermission
+ * + pushManager.subscribe in parallel — the duplicate POST creates duplicate
+ * server-side records. Module-level promise so the second caller awaits the
+ * first one's result. NOTE: this is the calling-context's concurrency control;
+ * the browser's pushManager.subscribe is itself serialized per origin.
+ */
+let inFlightSubscribe: Promise<SubscribeResult> | null = null;
+
+/**
+ * Audit fix: a base64 byte-comparison helper for VAPID key rotation. Two
+ * keys with different encodings (some leading `=` padding vs not, `-/_` vs
+ * `+//`) decode to the same bytes — comparing the raw decoded buffers is
+ * the only safe way to detect whether a stored subscription matches the
+ * key the server will sign with.
+ */
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/**
  * Full opt-in flow: request permission, subscribe via the service worker,
  * and POST the subscription to the server.
  *
@@ -67,47 +90,77 @@ export async function requestPermissionAndSubscribe(): Promise<SubscribeResult> 
   if (!isPushSupported()) {
     return { ok: false, error: 'Push not supported on this device' };
   }
-  if (!VAPID_PUBLIC_KEY) {
+  // Audit fix: also reject empty / whitespace VAPID keys — a deploy with
+  // an unset env var that fell back to `""` would otherwise reach
+  // urlBase64ToUint8Array (which doesn't validate) and crash subscribe()
+  // with `DOMException: InvalidAccessError`.
+  if (!VAPID_PUBLIC_KEY || VAPID_PUBLIC_KEY.trim().length === 0) {
     return { ok: false, error: 'Push not configured (missing VAPID key)' };
   }
 
-  try {
-    // 1. Permission. Calling on default/denied/granted is idempotent —
-    //    once denied, this resolves immediately with 'denied'.
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') {
-      return { ok: false, error: `Permission ${permission}` };
-    }
-
-    // 2. Get (or wait for) the active service worker registration.
-    const registration = await navigator.serviceWorker.ready;
-
-    // 3. Check for an existing subscription; reuse if present and
-    //    matches our current VAPID key, otherwise create a new one.
-    let subscription = await registration.pushManager.getSubscription();
-    if (!subscription) {
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as BufferSource,
-      });
-    }
-
-    // 4. Tell the server. Best effort — if the POST fails we still hand
-    //    the subscription back to the caller so the UI can reflect state.
+  // Reuse an already-in-flight subscribe call so concurrent invocations
+  // don't double-prompt or create duplicate server records.
+  if (inFlightSubscribe) return inFlightSubscribe;
+  inFlightSubscribe = (async (): Promise<SubscribeResult> => {
     try {
-      await fetch('/api/push/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscription: subscription.toJSON() }),
-      });
-    } catch {
-      // Network blip — server will get it on next subscribe attempt.
-    }
+      // 1. Permission. Calling on default/denied/granted is idempotent —
+      //    once denied, this resolves immediately with 'denied'.
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        return { ok: false, error: `Permission ${permission}` };
+      }
 
-    return { ok: true, subscription };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'subscribe failed';
-    return { ok: false, error: msg };
+      // 2. Get (or wait for) the active service worker registration.
+      const registration = await navigator.serviceWorker.ready;
+
+      // 3. Check for an existing subscription; reuse if present AND it was
+      //    issued for the CURRENT VAPID key. Audit fix: previously this
+      //    only checked existence — after a VAPID rotation, every old
+      //    client would silently keep its old subscription and the server
+      //    couldn't sign payloads for it (403 forever). Compare the bytes
+      //    of applicationServerKey against the current key and force a
+      //    re-subscribe on mismatch.
+      let subscription = await registration.pushManager.getSubscription();
+      const currentKeyBytes = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
+      if (subscription) {
+        const existingKey = subscription.options?.applicationServerKey;
+        const existingBytes = existingKey ? new Uint8Array(existingKey) : new Uint8Array(0);
+        if (!bytesEqual(existingBytes, currentKeyBytes)) {
+          // Key rotated — drop the stale subscription and resubscribe.
+          try { await subscription.unsubscribe(); } catch { /* best effort */ }
+          subscription = null;
+        }
+      }
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: currentKeyBytes as BufferSource,
+        });
+      }
+
+      // 4. Tell the server. Best effort — if the POST fails we still hand
+      //    the subscription back to the caller so the UI can reflect state.
+      try {
+        await fetch('/api/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subscription: subscription.toJSON() }),
+        });
+      } catch {
+        // Network blip — server will get it on next subscribe attempt.
+      }
+
+      return { ok: true, subscription };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'subscribe failed';
+      return { ok: false, error: msg };
+    }
+  })();
+
+  try {
+    return await inFlightSubscribe;
+  } finally {
+    inFlightSubscribe = null;
   }
 }
 
