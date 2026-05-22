@@ -159,6 +159,11 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
     queueRef.current = [];
     streamDoneRef.current = true;
     queueActiveRef.current = false;
+    // Audit fix: reset the dedup marker too. Previously stop() left
+    // lastQueuedRef pointing at the most-recent sentence, which silently
+    // muted the first matching sentence of the next stream (the chat
+    // interface's "Yes." → "Yes." case from the race-condition audit).
+    lastQueuedRef.current = '';
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
@@ -414,8 +419,18 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
     } catch (err) {
       console.warn('processQueue error:', err);
     } finally {
-      queueActiveRef.current = false;
-      setIsSpeaking(false);
+      // Audit fix: only clear queueActiveRef + isSpeaking if THIS processQueue
+      // is still the active one. Without this guard, a stop() (which bumps
+      // generation and sets queueActiveRef=false) followed by a quick new
+      // queueSentence (which starts a NEW processQueue) could be undone by
+      // the OLD processQueue's finally block running afterward — flipping
+      // queueActiveRef back to false while the new processQueue is still
+      // running, so the next queueSentence call would spawn a SECOND
+      // processQueue and we'd have two queues draining concurrently.
+      if (myGen === playbackGenRef.current) {
+        queueActiveRef.current = false;
+        setIsSpeaking(false);
+      }
       console.log('processQueue: finished');
     }
   }, [playOneSentence]);
