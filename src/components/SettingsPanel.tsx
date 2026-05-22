@@ -130,6 +130,7 @@ export function SettingsPanel({
               {PERSONALITIES.map(p => (
                 <button
                   key={p.id}
+                  type="button"
                   onClick={() => {
                     onPersonalityChange(p.id);
                     // Only toast on an actual change, not when re-tapping the current selection.
@@ -160,6 +161,8 @@ export function SettingsPanel({
               <p className="text-xs text-stone-500">Read AI responses aloud automatically</p>
             </div>
             <button
+              type="button"
+              aria-pressed={autoSpeak}
               onClick={onToggleAutoSpeak}
               className={`relative w-12 h-7 rounded-full transition-colors ${
                 autoSpeak ? 'bg-teal-500' : 'bg-stone-300'
@@ -187,6 +190,7 @@ export function SettingsPanel({
               {VISION_INTERVAL_OPTIONS.map(opt => (
                 <button
                   key={opt.value}
+                  type="button"
                   onClick={() => onVisionIntervalChange(opt.value)}
                   disabled={!cameraActive}
                   className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-colors ${
@@ -260,7 +264,7 @@ export function SettingsPanel({
               grounded in biblical teachings and parables. Not a replacement for
               spiritual counsel or professional advice.
             </p>
-            <p className="text-xs text-stone-400 mt-2">Version 1.0.0</p>
+            <p className="text-xs text-stone-500 mt-2">Version 1.0.0</p>
           </div>
         </div>
 

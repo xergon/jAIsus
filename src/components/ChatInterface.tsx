@@ -749,7 +749,10 @@ export function ChatInterface() {
               className="sticky bottom-0 bg-stone-50/90 backdrop-blur-sm px-4 py-3"
               style={keyboardHeight > 0 ? { paddingBottom: 12 + keyboardHeight } : undefined}
             >
-              {/* Text input row — always visible for keyboard questions */}
+              {/* Text input row — always visible for keyboard questions.
+                  Audit fix: explicit inputMode / autoComplete / autoCapitalize /
+                  enterKeyHint so iOS doesn't autocorrect prayer/scripture
+                  words and shows a Send key on the return button. */}
               <form onSubmit={handleTextSubmit} className="flex items-center gap-2 mb-2">
                 <input
                   type="text"
@@ -757,6 +760,12 @@ export function ChatInterface() {
                   onChange={e => setInput(e.target.value)}
                   disabled={status !== 'ready'}
                   placeholder="Type your question..."
+                  inputMode="text"
+                  enterKeyHint="send"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="sentences"
+                  spellCheck={false}
                   className="flex-1 rounded-full border border-stone-300 bg-white px-4 py-2 text-sm
                     focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent
                     disabled:opacity-50"
@@ -765,7 +774,7 @@ export function ChatInterface() {
                   <button
                     type="submit"
                     disabled={status !== 'ready'}
-                    className="w-9 h-9 rounded-full bg-teal-500 text-white flex items-center justify-center active:scale-95 transition-transform shadow-sm disabled:opacity-50"
+                    className="w-11 h-11 rounded-full bg-teal-500 text-white flex items-center justify-center active:scale-95 transition-transform shadow-sm disabled:opacity-50"
                     aria-label="Send"
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -775,11 +784,14 @@ export function ChatInterface() {
                 )}
               </form>
 
+              {/* Audit fix: bump 10×10 (40px) icon buttons up to 11×11 (44px)
+                  to meet WCAG 2.5.5 / iOS HIG touch-target minimum. */}
               <div className="flex items-center justify-center gap-3">
                 {/* Settings */}
                 <button
+                  type="button"
                   onClick={() => setActivePanel('settings')}
-                  className="w-10 h-10 rounded-full bg-stone-200 flex items-center justify-center text-stone-500 active:scale-95 transition-transform shadow-sm"
+                  className="w-11 h-11 rounded-full bg-stone-200 flex items-center justify-center text-stone-500 active:scale-95 transition-transform shadow-sm"
                   aria-label="Settings"
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -790,8 +802,9 @@ export function ChatInterface() {
                 {/* Camera toggle */}
                 {cameraSupported && (
                   <button
+                    type="button"
                     onClick={toggleCamera}
-                    className={`w-10 h-10 rounded-full flex items-center justify-center active:scale-95 transition-transform shadow-sm ${
+                    className={`w-11 h-11 rounded-full flex items-center justify-center active:scale-95 transition-transform shadow-sm ${
                       cameraActive ? 'bg-amber-500 text-white' : 'bg-stone-200 text-stone-500'
                     }`}
                     aria-label={cameraActive ? 'Turn off camera' : 'Let Jesus see you'}
@@ -821,8 +834,9 @@ export function ChatInterface() {
 
                 {/* Transcript toggle */}
                 <button
+                  type="button"
                   onClick={() => setShowTranscript(!showTranscript)}
-                  className={`w-10 h-10 rounded-full flex items-center justify-center active:scale-95 transition-transform shadow-sm ${
+                  className={`w-11 h-11 rounded-full flex items-center justify-center active:scale-95 transition-transform shadow-sm ${
                     showTranscript ? 'bg-teal-500 text-white' : 'bg-stone-200 text-stone-500'
                   }`}
                   aria-label="Show transcript"

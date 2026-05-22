@@ -123,7 +123,12 @@ export function OnboardingOverlay({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 animate-fade-in"
       // Tap outside the card to dismiss — matches user expectations for a modal.
-      onClick={onComplete}
+      // Audit fix: only dismiss when the tap actually lands on the BACKDROP
+      // itself (not a child). Previously a swipe that ended outside the card
+      // could bubble a click here and prematurely close the whole onboarding.
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onComplete();
+      }}
     >
       <style>{SLIDE_KEYFRAMES}</style>
 
@@ -142,7 +147,7 @@ export function OnboardingOverlay({
         <button
           type="button"
           onClick={onComplete}
-          className="absolute top-3 right-4 text-xs font-medium text-stone-400 hover:text-stone-600 active:scale-[0.98] transition-all"
+          className="absolute top-3 right-4 text-xs font-medium text-stone-500 hover:text-stone-700 active:scale-[0.98] transition-all"
         >
           Skip
         </button>
@@ -162,7 +167,7 @@ export function OnboardingOverlay({
           </p>
 
           {slide.note && (
-            <p className="mt-3 text-xs text-stone-400 italic text-center">
+            <p className="mt-3 text-xs text-stone-500 italic text-center">
               {slide.note}
             </p>
           )}

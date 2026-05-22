@@ -224,7 +224,10 @@ export function SpeakingHint({
 
   const classes = [
     // Positioning — fixed, just above the input bar, centered.
-    'fixed bottom-24 left-1/2 -translate-x-1/2 z-30',
+    // Audit fix: z-30 sat BELOW the sticky input bar's blurred background
+    // on small viewports. Bumped to z-40 so the "Tap to interrupt" pill
+    // always reads clearly.
+    'fixed bottom-24 left-1/2 -translate-x-1/2 z-40',
     // Pill styling.
     'bg-stone-900/80 backdrop-blur-sm text-white',
     'rounded-full px-4 py-2 shadow-lg',

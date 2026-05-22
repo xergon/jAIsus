@@ -70,7 +70,12 @@ function readAll(): CustomPersonality[] {
 function writeAll(list: CustomPersonality[]): boolean {
   if (typeof window === 'undefined') return false;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(list.slice(0, LIMITS.maxPersonalities)));
+    // Audit fix: sort newest-first by updatedAt BEFORE slicing so a
+    // cross-tab race that pushed a 21st entry doesn't drop the newest one.
+    const trimmed = [...list]
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      .slice(0, LIMITS.maxPersonalities);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
     emitChange();
     return true;
   } catch {

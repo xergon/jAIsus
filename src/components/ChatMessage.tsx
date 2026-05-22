@@ -177,7 +177,7 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
                   <div key={i} className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" style={{ animationDelay: `${i * 0.3}s` }} />
                 ))}
               </div>
-              <span className="text-xs text-stone-400 italic">speaking...</span>
+              <span className="text-xs text-stone-500 italic">speaking...</span>
             </div>
           </div>
         </div>
@@ -186,7 +186,16 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
   }
 
   const isLong = textContent.length > 300;
-  const displayText = isLong && !expanded ? textContent.slice(0, 280) + '...' : textContent;
+  // Audit fix: a raw .slice(0, 280) can land mid-emoji / mid-grapheme,
+  // producing visible mojibake. Cut at the last word boundary at or before
+  // 280 chars; fall back to the raw cut if no space is found in the head.
+  const displayText = isLong && !expanded
+    ? (() => {
+        const wordBoundary = textContent.lastIndexOf(' ', 280);
+        const cut = wordBoundary > 200 ? wordBoundary : 280;
+        return textContent.slice(0, cut).trimEnd() + '…';
+      })()
+    : textContent;
 
   return (
     <div className="flex justify-start animate-fade-in">
@@ -194,7 +203,7 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
         <div className="flex items-center gap-1.5 mb-1">
           <span className="text-xs font-semibold text-amber-700 tracking-wide">jAIsus</span>
           {contextLabel && (
-            <span className="text-[10px] text-stone-400 bg-stone-100 rounded-full px-2 py-0.5">
+            <span className="text-[10px] text-stone-600 bg-stone-100 rounded-full px-2 py-0.5">
               {contextLabel}
             </span>
           )}

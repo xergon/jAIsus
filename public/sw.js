@@ -11,14 +11,22 @@
  * The CACHE_VERSION below MUST be kept in sync with SW_VERSION in src/lib/sw-config.ts.
  */
 
-const CACHE_VERSION = 'v1';
+// Audit fix: bump per release. Keeping cache versions identical across builds
+// meant a stale cached `/` HTML (with old hashed chunk URLs) could be served
+// after a deploy, 404'ing on chunk fetches. Bump this whenever the SW or the
+// cached HTML / app-shell strategy changes — keep in sync with SW_VERSION in
+// src/lib/sw-config.ts so the in-app version check still triggers a reload.
+const CACHE_VERSION = 'v2';
 const CACHE_NAME = 'jaisus-' + CACHE_VERSION;
 const MAX_CACHE_ENTRIES = 50;
 const NAV_NETWORK_TIMEOUT_MS = 3000;
 
 // Small app shell — precached on install so the first offline visit has something to show.
+// Audit fix: `/` was previously precached, which let an offline PWA serve a STALE
+// HTML body across builds (with old hashed-asset references that 404 on the next
+// load). The navigation handler is network-first with a fast timeout and falls
+// back to the inline OFFLINE_HTML below, so we don't need to precache the root.
 const APP_SHELL = [
-  '/',
   '/manifest.json',
   '/jaisus-embraces.mp4',
   '/jaisus-prays.mp4',
@@ -140,17 +148,23 @@ async function networkFirstNavigation(request) {
       setTimeout(() => reject(new Error('nav-timeout')), NAV_NETWORK_TIMEOUT_MS);
     });
     const response = await Promise.race([networkPromise, timeoutPromise]);
-    // Only cache successful, basic (same-origin) responses
+    // Only cache successful, basic (same-origin) responses — AND respect
+    // the response's Cache-Control header. Audit fix: previously we'd cache
+    // the response unconditionally, which silently undid the `no-store`
+    // directive next.config.ts sets on `/` to prevent stale-HTML PWA traps.
     if (response && response.ok && response.type === 'basic') {
-      cache.put(request, response.clone()).then(() => trimCache(CACHE_NAME, MAX_CACHE_ENTRIES));
+      const cc = (response.headers.get('Cache-Control') || '').toLowerCase();
+      const uncacheable = /no-store|no-cache|private/.test(cc);
+      if (!uncacheable) {
+        cache.put(request, response.clone()).then(() => trimCache(CACHE_NAME, MAX_CACHE_ENTRIES));
+      }
     }
     return response;
   } catch {
     const cached = await cache.match(request);
     if (cached) return cached;
-    // Last resort: try cached '/' (precached on install), else inline offline page
-    const root = await cache.match('/');
-    if (root) return root;
+    // Last resort: inline offline page. `/` is no longer precached so we
+    // skip the cache.match('/') fallback that used to live here.
     return offlineResponse();
   }
 }
@@ -277,7 +291,20 @@ self.addEventListener('notificationclick', (event) => {
     (async () => {
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const client of clients) {
-        if ('focus' in client) { await client.focus(); return; }
+        if ('focus' in client) {
+          await client.focus();
+          // Audit fix: previously we just focused whatever tab was open and
+          // dropped the notification's URL on the floor. Now navigate the
+          // focused client to the requested path (same-origin already verified
+          // above; client.navigate enforces same-origin again).
+          try {
+            const clientUrl = new URL(client.url, self.location.origin);
+            if (clientUrl.pathname + clientUrl.search !== url && typeof client.navigate === 'function') {
+              await client.navigate(url);
+            }
+          } catch { /* keep focused tab as-is on URL parse failure */ }
+          return;
+        }
       }
       if (self.clients.openWindow) await self.clients.openWindow(url);
     })()

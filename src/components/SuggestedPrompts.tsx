@@ -42,6 +42,11 @@ export function SuggestedPrompts({
             key={p.id}
             type="button"
             onClick={() => onPick(p.text)}
+            // Audit fix: visible text is truncated to ~18rem, so SR users
+            // and tooltip-on-hover users would otherwise get a clipped read.
+            // title + aria-label expose the full prompt text.
+            title={p.text}
+            aria-label={p.text}
             className="
               snap-start shrink-0
               inline-flex items-center gap-1.5

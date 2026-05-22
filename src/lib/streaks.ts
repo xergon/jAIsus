@@ -79,10 +79,14 @@ function daysBetween(earlier: Date, later: Date): number {
 function isValidState(value: unknown): value is StreakState {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
+  // Audit fix: `typeof NaN === 'number'` and `typeof Infinity === 'number'`,
+  // so the original guard let NaN/Infinity through. A corrupted write would
+  // permanently break the streak math (NaN poisons every subsequent op).
+  // Require finite numbers for all three counters.
   return (
-    typeof v.current === 'number' &&
-    typeof v.longest === 'number' &&
-    typeof v.totalDays === 'number' &&
+    typeof v.current === 'number' && Number.isFinite(v.current) &&
+    typeof v.longest === 'number' && Number.isFinite(v.longest) &&
+    typeof v.totalDays === 'number' && Number.isFinite(v.totalDays) &&
     (v.lastActive === null || typeof v.lastActive === 'string')
   );
 }

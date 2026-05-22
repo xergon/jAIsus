@@ -15,8 +15,17 @@ interface HeroSectionProps {
  * Extended +60px with softer gradient blend.
  */
 export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSectionProps) {
+  // Audit fix: provide a `vh` fallback before `svh`. iOS Safari 15.0-15.3
+  // doesn't know `svh` units; without the fallback the height resolves to 0
+  // and the hero would collapse (the minHeight rescues it, but the intended
+  // responsive sizing breaks). The Tailwind arbitrary class declares both
+  // values via a feature query — modern browsers win with svh, old ones
+  // keep vh.
   return (
-    <div className="relative w-full overflow-hidden" style={{ height: '85svh', maxHeight: '900px', minHeight: '420px' }}>
+    <div
+      className="relative w-full overflow-hidden h-[85vh] [@supports(height:1svh)]:h-[85svh]"
+      style={{ maxHeight: '900px', minHeight: '420px' }}
+    >
       {/* ===== BACKGROUND: Jesus video/image fills hero ===== */}
       <div className="absolute inset-0 z-0">
         <AnimatedJesus isSpeaking={voiceState === 'speaking'} emotion={emotion} />

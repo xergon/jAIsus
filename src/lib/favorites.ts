@@ -106,7 +106,11 @@ function readAll(): Favorite[] {
 function writeAll(favorites: Favorite[]): void {
   if (typeof window === 'undefined') return;
   try {
-    const trimmed = favorites.slice(0, MAX_FAVORITES);
+    // Audit fix: sort newest-first BEFORE slicing so a corrupted / migrated
+    // storage order can't cause us to drop the newest entries on trim.
+    const trimmed = [...favorites]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, MAX_FAVORITES);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
   } catch {
     // Quota exceeded or storage unavailable — drop silently.

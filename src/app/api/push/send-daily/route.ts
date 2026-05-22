@@ -254,8 +254,20 @@ export async function GET(req: Request) {
       headers: { 'Content-Type': 'application/json' },
     });
   }
-  const auth = req.headers.get('authorization');
-  if (auth !== `Bearer ${cronSecret}`) {
+  const auth = req.headers.get('authorization') ?? '';
+  // Audit fix: length-equality short-circuit + constant-time compare. Pure
+  // `===` is a (very weak, over HTTPS through Vercel's edge) timing oracle.
+  // Defense in depth is cheap; switching costs nothing.
+  const expected = `Bearer ${cronSecret}`;
+  let authOk = false;
+  if (auth.length === expected.length) {
+    try {
+      authOk = crypto.timingSafeEqual(Buffer.from(auth), Buffer.from(expected));
+    } catch {
+      authOk = false;
+    }
+  }
+  if (!authOk) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },

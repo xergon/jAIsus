@@ -188,11 +188,25 @@ async function upstashPipeline(commands: string[][]): Promise<UpstashPipelineEnt
  * Returns the same shape as `rateLimit()` so `rateLimitResponse()` works
  * unchanged.
  */
+/** Warn once per process when Upstash isn't configured — the fallback
+ *  per-isolate in-memory bucket is effectively useless on edge runtime. */
+let warnedUnconfigured = false;
+function warnIfUnconfigured(key: string): void {
+  if (warnedUnconfigured) return;
+  warnedUnconfigured = true;
+  console.warn(
+    '[rate-limit] UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not set — ' +
+    'falling back to in-memory token bucket. On edge or multi-instance ' +
+    `runtimes the cap will not hold (route key: ${key.split(':')[0]}).`
+  );
+}
+
 export async function rateLimitAsync(
   key: string,
   config: RateLimitConfig
 ): Promise<RateLimitResult> {
   if (!upstashAvailable) {
+    warnIfUnconfigured(key);
     return rateLimit(key, config);
   }
 

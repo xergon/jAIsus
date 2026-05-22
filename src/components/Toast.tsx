@@ -151,7 +151,10 @@ function ToastCard({ toast, onDismiss, reducedMotion }: ToastCardProps) {
         type="button"
         onClick={handleClose}
         aria-label="Dismiss notification"
-        className="absolute top-1.5 right-1.5 w-7 h-7 inline-flex items-center justify-center rounded-full text-white/80 hover:text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 transition-colors"
+        // Audit fix: bump 7×7 (28px) → 11×11 (44px) to meet WCAG / iOS touch
+        // target minimums. Padding around a smaller × glyph keeps the visual
+        // weight unchanged while giving the user a real hit area.
+        className="absolute top-0.5 right-0.5 w-11 h-11 inline-flex items-center justify-center rounded-full text-white/80 hover:text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 transition-colors"
       >
         {/* Plain × glyph — no emoji, scales with the font */}
         <span aria-hidden="true" className="text-base leading-none">
@@ -288,7 +291,10 @@ export function ToastProvider() {
     <div
       // Fixed top-center stack. `pointer-events-none` so the wrapper never
       // blocks underlying UI; individual cards re-enable pointer events.
-      className="fixed top-4 inset-x-0 z-[100] flex flex-col items-center gap-2 px-4 pointer-events-none"
+      // Audit fix: add safe-area-inset-top so toasts don't sit under the
+      // notch / status bar when running as a PWA on notched iPhones.
+      className="fixed inset-x-0 z-[100] flex flex-col items-center gap-2 px-4 pointer-events-none"
+      style={{ top: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
       aria-label="Notifications"
     >
       {toasts.map((t) => (

@@ -59,7 +59,13 @@ function loadFromDisk(): Promise<void> {
 async function persistToDisk(): Promise<void> {
   try {
     const arr = Array.from(subscriptions.values());
-    await fs.writeFile(STORE_PATH, JSON.stringify(arr), 'utf8');
+    // Audit fix: atomic write via tmp+rename. fs.writeFile is not atomic —
+    // a function killed mid-write leaves a half-written JSON file, which
+    // the next loadFromDisk's JSON.parse silently swallows, dropping every
+    // subscription on the next read.
+    const tmpPath = STORE_PATH + '.tmp';
+    await fs.writeFile(tmpPath, JSON.stringify(arr), 'utf8');
+    await fs.rename(tmpPath, STORE_PATH);
   } catch {
     // Read-only filesystem or quota — log-and-continue. The in-memory Map
     // is still authoritative for the lifetime of this instance.
