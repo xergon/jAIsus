@@ -482,13 +482,27 @@ export function ChatInterface() {
 
   // VAD hook — fully dormant unless consent is granted AND jAIsus is
   // currently speaking. When it detects sustained voice activity, it
-  // stops TTS and resets the voice state machine so the user can talk
-  // naturally without tapping anything. (Barge-in interrupt.)
+  // stops TTS, resets the voice state machine, AND starts speech
+  // recognition so the user's barge-in is actually captured.
+  //
+  // User-reported bug fix: previously this only stopped TTS without
+  // starting recognition — so when the user spoke while jAIsus was
+  // speaking, jAIsus would go quiet but their voice was lost into
+  // the void. They had to tap the mic AGAIN to be heard.
   useVoiceActivityDetection({
     enabled: vadConsent === 'accepted' && voiceState === 'speaking',
     onSpeechStart: () => {
       stopSpeaking();
       reset();
+      // Tiny delay lets the TTS audio element release the mic resources
+      // before recognition tries to acquire them. Without it, some
+      // browsers (Safari especially) fail to start recognition because
+      // the audio output device is still in use.
+      setTimeout(() => {
+        if (mountedRef.current && isSupported) {
+          startRecognition();
+        }
+      }, 150);
     },
   });
 

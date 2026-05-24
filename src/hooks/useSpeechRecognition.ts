@@ -112,18 +112,19 @@ export function useSpeechRecognition(
     recognition.lang = 'en-US';
     submittedRef.current = false;
 
-    // Silence timeout: submit after ~3s of no new speech activity.
-    // Live-audit fix: previously this fired 2s after `onstart` regardless
-    // of whether the user had begun speaking — so a user who tapped mic
-    // and took 2 seconds to gather their thought got cut off before they
-    // even started. Now the timer is ONLY armed after the first
-    // `onresult` callback fires (i.e. Chrome has detected real speech),
-    // and the threshold is bumped to 3s so natural thinking pauses
-    // between sentences don't terminate recognition prematurely.
+    // Silence timeout: submit after ~2s of no new speech activity.
+    // Two-part fix (live user feedback "2s was better, but mid-sentence
+    // it would interrupt"):
+    //   1. The 2s threshold was correct — 3s felt sluggish.
+    //   2. The mid-sentence cutoff came from the silence timer being
+    //      armed BEFORE the user started speaking (so a 2s gather-thought
+    //      pause killed recognition before they uttered a word). Fixed
+    //      by only arming the timer on the first onresult that carries
+    //      real text — see onresult below.
     let silenceTimer: ReturnType<typeof setTimeout> | null = null;
     let accumulatedText = '';
     let hasReceivedAnyResult = false;
-    const SILENCE_MS = 3000;
+    const SILENCE_MS = 2000;
 
     function resetSilenceTimer() {
       if (silenceTimer) clearTimeout(silenceTimer);
@@ -174,21 +175,29 @@ export function useSpeechRecognition(
         }
       }
 
-      // Live-audit fix: ignore events that don't carry any actual text
-      // (Chrome occasionally fires onresult with empty interim strings).
-      // Without this, an empty result would re-arm the silence timer with
-      // accumulatedText=='' and the timer would tick down without the
-      // user having said anything meaningful.
       const newText = (full + interim).trim();
-      if (!newText) return;
 
-      hasReceivedAnyResult = true;
-      accumulatedText = full + interim;
-      setInterimTranscript(accumulatedText);
-      lastInterimRef.current = accumulatedText;
+      // Two-stage gating:
+      //   - To DECIDE the user has begun speaking (and thus arm the silence
+      //     timer for the first time), require non-empty transcript.
+      //   - But ONCE armed, reset the timer on ANY onresult, even one whose
+      //     interim is briefly empty mid-utterance. Chrome will fire empty
+      //     interim ticks while it's actively processing a long sentence;
+      //     ignoring them would let the silence timer fire mid-thought.
+      //     The previous version filtered empty results entirely, which
+      //     contributed to user-reported mid-sentence cutoffs.
+      if (newText) {
+        hasReceivedAnyResult = true;
+        accumulatedText = full + interim;
+        setInterimTranscript(accumulatedText);
+        lastInterimRef.current = accumulatedText;
+      }
 
-      // Reset silence timer — user is still talking
-      resetSilenceTimer();
+      // Reset silence timer if we've ever heard real speech in this session.
+      // Empty result while no speech has happened yet is ignored.
+      if (hasReceivedAnyResult) {
+        resetSilenceTimer();
+      }
     };
 
     recognition.onerror = (event) => {
