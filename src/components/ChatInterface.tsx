@@ -47,6 +47,10 @@ import { SavedMemosPanel } from './SavedMemosPanel';
 export function ChatInterface() {
   const [input, setInput] = useState('');
   const [activePanel, setActivePanel] = useState<ActivePanel>('none');
+  // Audit fix: autoSpeak previously didn't persist across page reloads —
+  // a user who turned it off in Settings would see it back on after a
+  // refresh. Defaults to true (the voice-first experience) but honors
+  // a prior setting if one exists.
   const [autoSpeak, setAutoSpeak] = useState(true);
   const [showTranscript, setShowTranscript] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -310,6 +314,12 @@ export function ChatInterface() {
     // Set voice to match personality
     const p = getPersonality(storedPid);
     setStoredVoiceId(p.voiceId);
+    // Audit fix: rehydrate the persisted autoSpeak preference.
+    try {
+      const stored = localStorage.getItem('jaisus-auto-speak');
+      if (stored === '0') setAutoSpeak(false);
+      else if (stored === '1') setAutoSpeak(true);
+    } catch { /* storage unavailable — keep default true */ }
     setMounted(true);
     // Show first-run onboarding overlay when localStorage says we haven't yet.
     // Checked here (client-side, post-mount) to avoid SSR hydration mismatch.
@@ -695,28 +705,12 @@ export function ChatInterface() {
       <div className="flex-1 flex flex-col max-w-md mx-auto w-full">
         <HeroSection voiceState={voiceState} interimTranscript={interimTranscript} emotion={currentEmotion} />
 
-        {/* Fast personality switcher — lives just below the hero so the user
-            can taste-test different vibes without opening Settings. The "+"
-            chip on the right opens the PersonalityCreator. */}
-        {mounted && (
-          <div className="px-4 pt-2 flex items-center gap-2">
-            <div className="flex-1 min-w-0">
-              <PersonalitySwitcher
-                activeId={personalityId}
-                onChange={handlePersonalityChange}
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => setActivePanel('personality-creator')}
-              className="shrink-0 w-10 h-10 rounded-full bg-white border border-stone-200 text-stone-600 text-xl leading-none flex items-center justify-center hover:border-amber-300 active:scale-95"
-              aria-label="Create custom personality"
-              title="Create your own jAIsus"
-            >
-              +
-            </button>
-          </div>
-        )}
+        {/* Live-audit fix: PersonalitySwitcher was rendered HERE as a flex
+            child between the hero and the spacer. On mobile (375x812) with
+            the hero at 85vh, the sticky input row's height (≈130px) was
+            larger than the remaining 15vh, so the switcher ended up visually
+            BEHIND the sticky bar — completely unreachable. Moved into the
+            sticky bottom container below so it's always above the input. */}
 
         {!autoSpeak && (
           <ActionButtons
@@ -810,6 +804,27 @@ export function ChatInterface() {
               className="sticky bottom-0 bg-stone-50/90 backdrop-blur-sm px-4 py-3"
               style={keyboardHeight > 0 ? { paddingBottom: 12 + keyboardHeight } : undefined}
             >
+              {/* Personality switcher — moved into the sticky container so it's
+                  always above the input row regardless of hero height. */}
+              {mounted && (
+                <div className="flex items-center gap-2 mb-2 -mx-4 px-4">
+                  <div className="flex-1 min-w-0">
+                    <PersonalitySwitcher
+                      activeId={personalityId}
+                      onChange={handlePersonalityChange}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActivePanel('personality-creator')}
+                    className="shrink-0 w-11 h-11 rounded-full bg-white border border-stone-200 text-stone-600 text-xl leading-none flex items-center justify-center hover:border-amber-300 active:scale-95"
+                    aria-label="Create custom personality"
+                    title="Create your own jAIsus"
+                  >
+                    +
+                  </button>
+                </div>
+              )}
               {/* Text input row — always visible for keyboard questions.
                   Audit fix: explicit inputMode / autoComplete / autoCapitalize /
                   enterKeyHint so iOS doesn't autocorrect prayer/scripture
@@ -1006,7 +1021,11 @@ export function ChatInterface() {
         isOpen={activePanel === 'settings'}
         onClose={() => setActivePanel('none')}
         autoSpeak={autoSpeak}
-        onToggleAutoSpeak={() => setAutoSpeak(!autoSpeak)}
+        onToggleAutoSpeak={() => {
+          const next = !autoSpeak;
+          setAutoSpeak(next);
+          try { localStorage.setItem('jaisus-auto-speak', next ? '1' : '0'); } catch { /* */ }
+        }}
         onClearHistory={handleClearHistory}
         onTestVoice={() => speak('Peace be with you, my friend. I have walked among you for two thousand years.')}
         visionInterval={visionInterval}
