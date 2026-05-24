@@ -23,8 +23,17 @@ export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSect
   // keep vh.
   return (
     <div
-      className="relative w-full overflow-hidden h-[85vh] [@supports(height:1svh)]:h-[85svh]"
-      style={{ maxHeight: '900px', minHeight: '420px' }}
+      // Bug fix (user-reported "startscreen looks broken, need to scroll up"):
+      // 85vh was too tall once the sticky bottom container grew to include
+      // the personality switcher row (chips + create button) ABOVE the input
+      // form + icon row. Total bottom = ~190px. On a 670-700px tall mobile
+      // viewport (after browser chrome) the hero pushed the title above
+      // the top edge and the page either clipped or required a scroll the
+      // user wasn't expecting on a "voice-first" hero screen. Drop the
+      // hero to 70vh on small viewports and let it grow back to 80vh on
+      // taller screens via min-height. The maxHeight cap still applies.
+      className="relative w-full overflow-hidden h-[70vh] [@supports(height:1svh)]:h-[70svh] sm:h-[80vh] sm:[@supports(height:1svh)]:h-[80svh]"
+      style={{ maxHeight: '900px', minHeight: '380px' }}
     >
       {/* ===== BACKGROUND: Jesus video/image fills hero ===== */}
       <div className="absolute inset-0 z-0">

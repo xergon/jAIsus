@@ -805,9 +805,15 @@ export function ChatInterface() {
               style={keyboardHeight > 0 ? { paddingBottom: 12 + keyboardHeight } : undefined}
             >
               {/* Personality switcher — moved into the sticky container so it's
-                  always above the input row regardless of hero height. */}
+                  always above the input row regardless of hero height.
+                  Bug fix: previously had `-mx-4 px-4` on this wrapper which
+                  double-padded against PersonalitySwitcher's own `px-4`
+                  internal padding. The result was chips overflowing the
+                  viewport on both left and right edges. The sticky parent
+                  already has px-4, so this row just needs `-mx-4` to let
+                  the chip strip extend edge-to-edge for horizontal scroll. */}
               {mounted && (
-                <div className="flex items-center gap-2 mb-2 -mx-4 px-4">
+                <div className="flex items-center gap-2 mb-2 -mx-4">
                   <div className="flex-1 min-w-0">
                     <PersonalitySwitcher
                       activeId={personalityId}
@@ -817,7 +823,7 @@ export function ChatInterface() {
                   <button
                     type="button"
                     onClick={() => setActivePanel('personality-creator')}
-                    className="shrink-0 w-11 h-11 rounded-full bg-white border border-stone-200 text-stone-600 text-xl leading-none flex items-center justify-center hover:border-amber-300 active:scale-95"
+                    className="shrink-0 mr-4 w-11 h-11 rounded-full bg-white border border-stone-200 text-stone-600 text-xl leading-none flex items-center justify-center hover:border-amber-300 active:scale-95"
                     aria-label="Create custom personality"
                     title="Create your own jAIsus"
                   >
