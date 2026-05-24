@@ -492,6 +492,10 @@ export function ChatInterface() {
   useVoiceActivityDetection({
     enabled: vadConsent === 'accepted' && voiceState === 'speaking',
     onSpeechStart: () => {
+      // Barge-in is the clearest possible signal that the user wants
+      // voice mode — they're literally interrupting with their voice.
+      // Arm the hands-free loop.
+      voiceLoopActiveRef.current = true;
       stopSpeaking();
       reset();
       // Tiny delay lets the TTS audio element release the mic resources
@@ -578,8 +582,21 @@ export function ChatInterface() {
     }
   }, [messages]);
 
+  // Hands-free conversation flag (user request: "i press mic, jesus
+  // answers, i have to press mic again. would be better if he would
+  // just listen"). When the user initiates a voice turn (via the mic
+  // button OR a barge-in), this flips true. After TTS finishes
+  // speaking, an effect below auto-restarts recognition for the next
+  // turn. Reset by:
+  //   - User typing a text message (back to text mode)
+  //   - User manually stopping TTS / recognition (explicit pause)
+  //   - User clearing history
+  //   - Errors (network, permission)
+  const voiceLoopActiveRef = useRef(false);
+
   const handleVoiceResult = useCallback((transcript: string) => {
     console.log('handleVoiceResult called:', transcript);
+    voiceLoopActiveRef.current = true;
     startProcessing();
     try {
       sendMessage({ text: transcript });
@@ -595,6 +612,49 @@ export function ChatInterface() {
       stopRecognition();
     }
   }, [isSpeaking, isListening, stopRecognition]);
+
+  // Hands-free: when TTS finishes AND the conversation is in voice mode,
+  // automatically re-arm recognition for the next user turn. Guards:
+  //   - voiceLoopActiveRef: user must have started this leg by voice
+  //   - !isSpeaking: TTS has actually finished
+  //   - !isListening: not already listening
+  //   - status === 'ready': chat is idle (not mid-stream)
+  //   - isSupported: browser has recognition
+  //   - autoSpeak: only in voice-first mode (text mode users shouldn't
+  //     suddenly find their mic listening)
+  const autoListenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    // Clear any pending timer when conditions change.
+    if (autoListenTimerRef.current) {
+      clearTimeout(autoListenTimerRef.current);
+      autoListenTimerRef.current = null;
+    }
+    if (!voiceLoopActiveRef.current) return;
+    if (!autoSpeak) return;
+    if (!isSupported) return;
+    if (isSpeaking || isListening) return;
+    if (status !== 'ready') return;
+
+    // Defer slightly so the user has a beat after TTS ends to interrupt
+    // (e.g., turn off the mic if they're done) and so the audio output
+    // device releases before recognition tries to acquire the mic.
+    autoListenTimerRef.current = setTimeout(() => {
+      autoListenTimerRef.current = null;
+      // Re-check conditions at fire time (state may have changed).
+      if (!voiceLoopActiveRef.current) return;
+      if (isSpeakingRef.current) return;
+      if (statusRef.current !== 'ready') return;
+      console.log('Hands-free: auto-restarting recognition');
+      startRecognition();
+    }, 500);
+
+    return () => {
+      if (autoListenTimerRef.current) {
+        clearTimeout(autoListenTimerRef.current);
+        autoListenTimerRef.current = null;
+      }
+    };
+  }, [isSpeaking, isListening, status, autoSpeak, isSupported, startRecognition]);
 
   useEffect(() => {
     if (isListening) {
@@ -621,6 +681,9 @@ export function ChatInterface() {
   function handleTextSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!input.trim() || status !== 'ready') return;
+    // Text input means the user is in keyboard mode — exit the hands-free
+    // voice loop so the mic doesn't auto-re-arm after the reply finishes.
+    voiceLoopActiveRef.current = false;
     sendMessage({ text: input });
     setInput('');
   }
@@ -631,6 +694,9 @@ export function ChatInterface() {
 
   function handleAskQuestion() {
     if (isSupported) {
+      // User explicitly tapped "Ask a Question" — they're choosing voice
+      // mode, so enable the hands-free loop.
+      voiceLoopActiveRef.current = true;
       startRecognition();
     }
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -647,8 +713,14 @@ export function ChatInterface() {
       voiceToggleTimerRef.current = null;
     }
     if (voiceState === 'listening') {
+      // Manual stop while listening — user wants to pause the conversation.
+      // Exit the hands-free loop so we don't immediately re-listen after.
+      voiceLoopActiveRef.current = false;
       stopRecognition();
     } else if (voiceState === 'speaking' || isSpeaking) {
+      // Manual interrupt while TTS plays. User wants to talk → arm voice
+      // loop and start recognition after a short delay.
+      voiceLoopActiveRef.current = true;
       stopSpeaking();
       reset();
       voiceToggleTimerRef.current = setTimeout(() => {
@@ -656,11 +728,15 @@ export function ChatInterface() {
         startRecognition();
       }, 150);
     } else {
+      // Fresh mic press from idle — arm hands-free loop.
+      voiceLoopActiveRef.current = true;
       startRecognition();
     }
   }
 
   function handleClearHistory() {
+    // Clearing history exits the hands-free loop too.
+    voiceLoopActiveRef.current = false;
     // Audit fix: abort the in-flight chat stream FIRST. Without this, a clear
     // during streaming would let tokens keep arriving on a destroyed message,
     // useChat would re-insert under a new ID, and the streaming-TTS effect
