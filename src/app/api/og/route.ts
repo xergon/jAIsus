@@ -22,7 +22,9 @@ import { ImageResponse } from 'next/og';
 import { createElement, type CSSProperties, type ReactElement } from 'react';
 import { clientKey, rateLimitAsync, rateLimitResponse } from '@/lib/rate-limit';
 
-export const runtime = 'edge';
+// Node runtime: the edge bundle (Satori + fonts) is just over Vercel's 1 MB
+// Edge Function limit, which failed the whole deploy. next/og works on Node.
+export const runtime = 'nodejs';
 
 // Crawlers + social-media unfurl bots hammer this endpoint. Rendering a PNG
 // uses real Satori CPU. Cap to 120-burst / 2-per-sec sustained so a misbehaving
