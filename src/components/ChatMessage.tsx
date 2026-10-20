@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import type { UIMessage } from 'ai';
 import { stripAllEmotionTags } from '@/lib/emotions';
 import { FavoriteButton } from './FavoriteButton';
@@ -9,13 +9,44 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { useLongPress } from '@/hooks/useLongPress';
 import { toggleFavorite, favoriteId, isFavorite } from '@/lib/favorites';
 import { toast } from '@/lib/toast';
+import { parables } from '@/lib/parables';
 
 interface ChatMessageProps {
   message: UIMessage;
   hidden?: boolean; // Voice-only mode: hide AI response text while speaking
+  /** The reply is still arriving: no saving or sharing a partial text. */
+  isStreaming?: boolean;
 }
 
-export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
+/**
+ * Drops an [EMOTION:...] tag that is still arriving at the end of a streamed
+ * reply ("My child. [EMOTION:wa"); stripAllEmotionTags only removes whole tags.
+ */
+export function stripPartialEmotionTag(text: string): string {
+  return text.replace(/\[(?:E(?:M(?:O(?:T(?:I(?:O(?:N(?::\s*\w*\s*)?)?)?)?)?)?)?)?$/i, '');
+}
+
+// Known parable names as they follow "Parable of the": "Mustard Seed", ...
+const PARABLE_NAMES = parables
+  .filter(p => p.title.startsWith('The '))
+  .map(p => p.title.slice(4));
+
+/** "Parable of the Sower" for a reply that mentions one, else null. */
+function parableLabel(text: string): string | null {
+  const match = text.match(/parable of the ([^.!?,;:\n"“”*()]+)/i);
+  if (!match) return null;
+  const rest = match[1].trim();
+  const lower = rest.toLowerCase();
+  const known = PARABLE_NAMES.find(name => {
+    const n = name.toLowerCase();
+    return lower === n || lower.startsWith(n + ' ');
+  });
+  // An unknown one: its first few words, not the rest of the sentence.
+  const name = known ?? rest.split(/\s+/).slice(0, 3).join(' ');
+  return name ? `Parable of the ${name}` : null;
+}
+
+function ChatMessageImpl({ message, hidden = false, isStreaming = false }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const [expanded, setExpanded] = useState(false);
   // Long-press / right-click context menu (assistant messages only).
@@ -27,11 +58,10 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
     .join('');
 
   // Strip all per-sentence emotion tags from assistant messages
-  const textContent = !isUser ? stripAllEmotionTags(rawText).cleanText : rawText;
+  const textContent = !isUser ? stripPartialEmotionTag(stripAllEmotionTags(rawText).cleanText) : rawText;
 
   // Detect parable context references
-  const parableMatch = textContent.match(/(?:Parable of the |parable of the )([^.!?,]+)/i);
-  const contextLabel = parableMatch ? `Parable of the ${parableMatch[1].trim()}` : null;
+  const contextLabel = parableLabel(textContent);
 
   // useLongPress is called every render (hook rules) regardless of whether we
   // bind it; we only spread `bind` onto the assistant bubble below. The
@@ -60,9 +90,10 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
   // hook order is stable. The `items` array is only consumed below in the
   // assistant-message branch, but the memo runs unconditionally — cheap, and
   // keeps the rules-of-hooks contract.
+  // Read from storage each time the menu opens: the heart button (or this
+  // menu) may have changed it since.
+  const alreadySaved = menu !== null && isFavorite(favoriteId('message', textContent));
   const items: ContextMenuItem[] = useMemo(() => {
-    const alreadySaved = isFavorite(favoriteId('message', textContent));
-
     const handleCopy = async () => {
       try {
         if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
@@ -148,7 +179,7 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
         onClick: handleToggleSave,
       },
     ];
-  }, [textContent, contextLabel]);
+  }, [textContent, contextLabel, alreadySaved]);
 
   if (!textContent) return null;
 
@@ -156,7 +187,7 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
     return (
       <div className="flex justify-end animate-fade-in">
         <div className="bg-blue-500 text-white rounded-2xl rounded-br-sm px-4 py-2.5 max-w-[85%] shadow-sm">
-          <p className="text-sm leading-relaxed">{textContent}</p>
+          <p className="text-sm leading-relaxed [overflow-wrap:anywhere]">{textContent}</p>
         </div>
       </div>
     );
@@ -203,32 +234,36 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
         <div className="flex items-center gap-1.5 mb-1">
           <span className="text-xs font-semibold text-amber-700 tracking-wide">jAIsus</span>
           {contextLabel && (
-            <span className="text-[10px] text-stone-600 bg-stone-100 rounded-full px-2 py-0.5">
+            <span
+              className="min-w-0 max-w-[10rem] truncate text-[10px] text-stone-600 bg-stone-100 rounded-full px-2 py-0.5"
+              title={contextLabel}
+            >
               {contextLabel}
             </span>
           )}
+          {/* Hidden (not removed) while streaming, so the row keeps its height. */}
           <FavoriteButton
             kind="message"
             content={textContent}
             context={contextLabel ?? undefined}
             size="sm"
-            className="ml-auto"
+            className={isStreaming ? 'ml-auto invisible' : 'ml-auto'}
           />
           <ShareButton
             kind="message"
             content={textContent}
             context={contextLabel ?? undefined}
             size="sm"
-            className="-mr-1"
+            className={isStreaming ? '-mr-1 invisible' : '-mr-1'}
           />
         </div>
         {/* Long-press / right-click opens a context menu. The header icons
             (Favorite, Share) remain — long-press is a power-user shortcut. */}
         <div
-          {...bind}
+          {...(isStreaming ? {} : bind)}
           className="bg-white border border-stone-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm select-none"
         >
-          <p className="text-sm text-stone-700 leading-relaxed whitespace-pre-wrap">{displayText}</p>
+          <p className="text-sm text-stone-700 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{displayText}</p>
           {isLong && (
             <button
               onClick={() => setExpanded(!expanded)}
@@ -248,3 +283,10 @@ export function ChatMessage({ message, hidden = false }: ChatMessageProps) {
     </div>
   );
 }
+
+// Perf audit fix: memoize so a re-render of the chat list (ChatInterface
+// re-renders on every streaming token) doesn't rebuild N ChatMessages.
+// The `message` prop is a stable object reference from useChat until it
+// actually changes; `hidden` is a boolean. Default shallow-equality is
+// sufficient — no custom comparator needed.
+export const ChatMessage = memo(ChatMessageImpl);

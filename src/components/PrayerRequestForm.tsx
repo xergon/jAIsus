@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useModalA11y } from '@/hooks/useModalA11y';
+import { useKeyboardInset } from '@/hooks/useKeyboardInset';
 import { toast } from '@/lib/toast';
 import { track } from '@/lib/analytics';
 
@@ -17,6 +18,7 @@ export function PrayerRequestForm({ isOpen, onClose }: PrayerRequestFormProps) {
   const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useModalA11y({ isOpen, onClose, ref: dialogRef });
+  const keyboard = useKeyboardInset(isOpen);
 
   // Cleanup the close-timeout on unmount or if the modal closes early
   useEffect(() => {
@@ -91,6 +93,7 @@ export function PrayerRequestForm({ isOpen, onClose }: PrayerRequestFormProps) {
         aria-modal="true"
         aria-labelledby="prayer-title"
         className="relative w-full max-w-md bg-white rounded-t-2xl shadow-2xl p-5 animate-slide-up"
+        style={keyboard.maxHeight ? { marginBottom: keyboard.inset, maxHeight: keyboard.maxHeight, overflowY: 'auto' } : undefined}
       >
         <div className="flex justify-center mb-3">
           <div className="w-10 h-1 rounded-full bg-stone-300" aria-hidden="true" />

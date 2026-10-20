@@ -50,8 +50,21 @@ export async function POST(req: Request) {
   try {
     const { text } = await generateText({
       model: anthropic('claude-haiku-4-5-20251001'),
-      system: TEACHING_PROMPT,
-      prompt: `Generate a spiritual teaching about: ${topic}`,
+      // Perf audit fix: TEACHING_PROMPT is a large stable system prompt
+      // hit repeatedly (once per burst-limited topic). Cache it with
+      // Anthropic's ephemeral cache — same treatment /api/chat gives the
+      // personality prompt. First hit warms it; every subsequent request
+      // in the 5-minute window pays only for the topic delta.
+      messages: [
+        {
+          role: 'system',
+          content: TEACHING_PROMPT,
+          providerOptions: {
+            anthropic: { cacheControl: { type: 'ephemeral' } },
+          },
+        },
+        { role: 'user', content: `Generate a spiritual teaching about: ${topic}` },
+      ],
       // Audit fix: stop billing for the generation when the client hangs up.
       // Teachings are the longest-form Anthropic call in the app.
       abortSignal: req.signal,

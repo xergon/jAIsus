@@ -69,6 +69,18 @@ const nextConfig: NextConfig = {
       ],
     },
     {
+      // Perf audit fix: MP4 hero videos are ~12MB each and previously served
+      // with the default `public, max-age=0, must-revalidate`. That forced
+      // every mobile user to re-download the video on every session even
+      // though the filenames are stable. Cached for a day, then revalidated:
+      // these files are not content-hashed and do get replaced in place.
+      source: '/:path*.(mp4|webm|mp3|wav|png|jpg|jpeg|webp|svg|woff|woff2|ttf|otf)',
+      headers: [
+        { key: 'Cache-Control', value: 'public, max-age=86400, stale-while-revalidate=604800' },
+        ...SECURITY_HEADERS,
+      ],
+    },
+    {
       // Security headers for everything else (static assets, images) too,
       // minus the Cache-Control override (Next handles their caching).
       source: '/:path*',

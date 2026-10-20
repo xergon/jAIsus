@@ -1,18 +1,18 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useEffectEvent, useRef, useCallback, useMemo } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport } from 'ai';
+import { DefaultChatTransport, type UIMessage } from 'ai';
 import type { ActivePanel } from '@/lib/types';
-import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
-import { useSpeechSynthesis, setStoredVoiceId } from '@/hooks/useSpeechSynthesis';
+import { useSpeechRecognition, type SpeechSessionEnd } from '@/hooks/useSpeechRecognition';
+import { useSpeechSynthesis, setStoredVoiceId, getVoiceOverride, setVoiceOverride } from '@/hooks/useSpeechSynthesis';
 import { useVoiceState } from '@/hooks/useVoiceState';
 import { useChatHistory } from '@/hooks/useChatHistory';
 import { useCamera } from '@/hooks/useCamera';
 import { stripAllEmotionTags, type Emotion } from '@/lib/emotions';
 import { HeroSection } from './HeroSection';
 import { ActionButtons } from './ActionButtons';
-import { ChatMessage } from './ChatMessage';
+import { ChatMessage, stripPartialEmotionTag } from './ChatMessage';
 import { VoiceButton } from './VoiceButton';
 import { ParablesDrawer } from './ParablesDrawer';
 import { PrayerRequestForm } from './PrayerRequestForm';
@@ -31,18 +31,89 @@ import { SearchPanel } from './SearchPanel';
 import { SpeakingHint } from './SpeakingHint';
 import { PersonalitySwitcher } from './PersonalitySwitcher';
 import { StreakBadge } from './StreakBadge';
+import { recordActivity } from '@/lib/streaks';
 import { MoodSelector } from './MoodSelector';
 import { hasSeenOnboarding, markOnboardingSeen } from '@/lib/onboarding';
 import { track } from '@/lib/analytics';
 import { useConversationMemory } from '@/hooks/useConversationMemory';
 import { memoriesAsContext } from '@/lib/conversation-memory';
-import { getCustomPersonality, isCustomId } from '@/lib/custom-personalities';
+import { getCustomPersonality, isCustomId, CUSTOM_CHANGED_EVENT } from '@/lib/custom-personalities';
 import { PersonalityCreator } from './PersonalityCreator';
 import { useVoiceActivityDetection } from '@/hooks/useVoiceActivityDetection';
 import { VADConsentPrompt, getVADConsent, setVADConsent, type VADConsent } from './VADConsentPrompt';
 import { NotificationOptInPrompt, hasSeenNotificationPrompt } from './NotificationOptInPrompt';
 import { VoiceMemoModal } from './VoiceMemoModal';
 import { SavedMemosPanel } from './SavedMemosPanel';
+import { isPushSupported, getPermissionState } from '@/lib/push-client';
+
+/** A request is on its way. 'error' counts as idle: the user can ask again. */
+function isChatBusy(status: string): boolean {
+  return status === 'submitted' || status === 'streaming';
+}
+
+function chatErrorMessage(error: Error): string {
+  if (/rate limit/i.test(error.message)) {
+    return 'Too many questions at once. Please wait a moment, then try again.';
+  }
+  return "jAIsus couldn't answer just now. Check your connection and try again.";
+}
+
+// The camera's automatic prompts. They are sent as user messages but are not
+// the user's words, so they are never shown as such.
+const FIRST_VISION_PROMPT = '(You just opened your eyes and can see the user for the first time. React with excitement and warmth to what you see!)';
+const VISION_PROMPTS = [
+  '(observe what you see and comment naturally)',
+  '(look around and share what catches your eye)',
+  '(react to what you see right now)',
+  '(notice something about the scene and mention it)',
+  '(comment on what is happening around you)',
+];
+const VISION_PING_TEXTS = new Set([FIRST_VISION_PROMPT, ...VISION_PROMPTS]);
+
+function messageText(message: UIMessage): string {
+  return message.parts
+    .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
+    .map(p => p.text)
+    .join('');
+}
+
+function isVisionPing(message: UIMessage): boolean {
+  return message.role === 'user' && VISION_PING_TEXTS.has(messageText(message));
+}
+
+/** The voice picked for this personality in Settings, else its own voice. */
+function applyPersonalityVoice(personalityId: string) {
+  setStoredVoiceId(getVoiceOverride(personalityId) ?? getPersonality(personalityId).voiceId);
+}
+
+/** Any text with a letter or digit is worth speaking, even "Amen." or "Sad!". */
+function isSpeakable(text: string): boolean {
+  return /[\p{L}\p{N}]/u.test(text);
+}
+
+/**
+ * Splits a long sentence at commas, semicolons and dashes. Short pieces
+ * ("Oh,", "Yes,") are joined to the next piece instead of being dropped.
+ */
+function splitLongSentence(sentence: string): string[] {
+  const parts = sentence.split(/(?<=[,;])\s+| — |—/).map(p => p.trim()).filter(Boolean);
+  const chunks: string[] = [];
+  let carry = '';
+  for (const part of parts) {
+    const joined = carry ? `${carry} ${part}` : part;
+    if (joined.length < 12) {
+      carry = joined;
+    } else {
+      chunks.push(joined);
+      carry = '';
+    }
+  }
+  if (carry) {
+    if (chunks.length > 0) chunks[chunks.length - 1] += ` ${carry}`;
+    else chunks.push(carry);
+  }
+  return chunks;
+}
 
 export function ChatInterface() {
   const [input, setInput] = useState('');
@@ -73,6 +144,11 @@ export function ChatInterface() {
   // Notification opt-in modal — gated behind a few conditions checked in the
   // effect below (enough messages, no other modal open, not previously seen).
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
+  // Anything covering the screen. The hands-free mic and voice barge-in wait
+  // while one is open, so speech isn't picked up (and sent) behind it.
+  const anyModalOpen = activePanel !== 'none' || showVADPrompt || showNotificationPrompt || showOnboarding;
+  const [pageHidden, setPageHidden] = useState(false);
+  const isListeningRef = useRef(false);
   const personalityRef = useRef('mushroom-guru');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef<string>('ready');
@@ -90,10 +166,15 @@ export function ChatInterface() {
 
   const { loadMessages, saveMessages, clearHistory } = useChatHistory();
   const { summarizeAndSave } = useConversationMemory();
-  const { voiceState, startListening, startProcessing, startSpeaking, reset } = useVoiceState();
+  const { voiceState, setVoiceState, startListening, startProcessing, startSpeaking, reset } = useVoiceState();
   const { speak, queueSentence, stop: stopSpeaking, isSpeaking } = useSpeechSynthesis();
   const spokenLengthRef = useRef(0);
-  const queuedSentencesRef = useRef<Set<string>>(new Set());
+  // A reply the user silenced while it was still streaming: the streaming-TTS
+  // effect must not pick it back up (or restart it) as more text arrives.
+  const mutedMessageIdRef = useRef<string | null>(null);
+  // Height of the voice-mode bottom bar, so the "Tap to interrupt" pill sits above it.
+  const bottomBarRef = useRef<HTMLDivElement>(null);
+  const [bottomBarHeight, setBottomBarHeight] = useState(0);
 
   // Camera / vision
   const { isActive: cameraActive, sceneDescription, videoRef, toggle: toggleCamera, isSupported: cameraSupported, error: cameraError } = useCamera();
@@ -112,7 +193,9 @@ export function ChatInterface() {
     if (!vv) return;
 
     const update = () => {
-      const offset = Math.max(0, window.innerHeight - vv.height);
+      // vv.height also shrinks with pinch zoom; scaling it back leaves only
+      // the keyboard.
+      const offset = Math.max(0, window.innerHeight - vv.height * vv.scale);
       setKeyboardHeight(offset);
     };
     update();
@@ -123,6 +206,16 @@ export function ChatInterface() {
       vv.removeEventListener('scroll', update);
     };
   }, []);
+
+  // The voice-mode bar only exists after mount with auto-speak on; its height
+  // changes with the keyboard padding and the status lines.
+  useEffect(() => {
+    const bar = bottomBarRef.current;
+    if (!bar || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setBottomBarHeight(bar.offsetHeight));
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [autoSpeak, mounted]);
 
   // Transport with dynamic body — reads sceneRef and personalityRef on each request
   const transport = useMemo(() => new DefaultChatTransport({
@@ -155,7 +248,10 @@ export function ChatInterface() {
     },
   }), []);
 
-  const { messages, sendMessage, status, setMessages, stop: stopChat } = useChat({ transport });
+  const {
+    messages, sendMessage, regenerate, status, setMessages, stop: stopChat,
+    error: chatError, clearError: clearChatError,
+  } = useChat({ transport });
 
   // Auto-vision: periodic + immediate first reaction
   const statusRef = useRef(status);
@@ -194,39 +290,41 @@ export function ChatInterface() {
       }
       return;
     }
-    // Fire once when we get the first scene description
-    if (hasReactedToCamera.current) return;
+    // Fire once when we get the first scene description. A wait already in
+    // progress keeps going: a new scene arrives every ~10 s, and cancelling
+    // the wait on each one lost the reaction for the whole camera session.
+    if (hasReactedToCamera.current || tryFirstTimeoutRef.current !== null) return;
     if (!sceneDescription) return;
     if (!mountedRef.current) return;
 
-    hasReactedToCamera.current = true;
-    console.log('First camera reaction — immediate vision ping');
-
-    // Wait for status to be ready, then send. The recursive setTimeout is
-    // tracked in a ref so we can cancel it if the user turns the camera
-    // off / the component unmounts during the wait.
+    // Wait until jAIsus is free and it isn't the user's turn to talk, then
+    // send. The recursive setTimeout is tracked in a ref so turning the
+    // camera off / unmounting cancels it.
     const tryFirst = () => {
       tryFirstTimeoutRef.current = null;
-      if (!mountedRef.current || !cameraActive) return;
-      if (statusRef.current !== 'ready') {
+      if (!mountedRef.current || hasReactedToCamera.current) return;
+      if (isChatBusy(statusRef.current) || isSpeakingRef.current || isMicBusy()) {
         tryFirstTimeoutRef.current = setTimeout(tryFirst, 500);
         return;
       }
+      hasReactedToCamera.current = true;
+      // So the periodic ping doesn't fire right on top of this one.
+      lastVisionPingTimeRef.current = Date.now();
+      console.log('First camera reaction — immediate vision ping');
       try {
-        sendMessageRef.current({ text: '(You just opened your eyes and can see the user for the first time. React with excitement and warmth to what you see!)' });
+        sendMessageRef.current({ text: FIRST_VISION_PROMPT });
       } catch (err) {
         console.warn('Immediate vision sendMessage failed:', err);
       }
     };
     tryFirst();
-
-    return () => {
-      if (tryFirstTimeoutRef.current !== null) {
-        clearTimeout(tryFirstTimeoutRef.current);
-        tryFirstTimeoutRef.current = null;
-      }
-    };
   }, [cameraActive, sceneDescription]);
+
+  useEffect(() => {
+    return () => {
+      if (tryFirstTimeoutRef.current !== null) clearTimeout(tryFirstTimeoutRef.current);
+    };
+  }, []);
 
   // Recurring auto-vision: periodic prompts while camera is active
   // Uses a fast tick (2s) but tracks time since last successful ping
@@ -234,13 +332,6 @@ export function ChatInterface() {
   useEffect(() => {
     if (!cameraActive || !autoSpeak) return;
 
-    const visionPrompts = [
-      '(observe what you see and comment naturally)',
-      '(look around and share what catches your eye)',
-      '(react to what you see right now)',
-      '(notice something about the scene and mention it)',
-      '(comment on what is happening around you)',
-    ];
     let promptIndex = 0;
     // First-ever auto-ping after camera activation: seed to "now" so we don't
     // immediately fire (the first-reaction effect already handled that path).
@@ -261,18 +352,22 @@ export function ChatInterface() {
       // Check if enough time has elapsed since last successful ping
       const elapsed = (Date.now() - lastVisionPingTimeRef.current) / 1000;
       if (elapsed < visionInterval) return;
-      // Wait for ready status — but because we tick every 2s, we'll
+      // Wait for the chat to be idle — but because we tick every 2s, we'll
       // catch the moment jAIsus finishes speaking almost immediately
-      if (statusRef.current !== 'ready') return;
+      if (isChatBusy(statusRef.current)) return;
       // Audit fix (race #5): also wait for TTS to actually finish reading
       // the previous response. status flips to 'ready' the moment streaming
       // ends, but the sentence queue can still have 3-4 unspoken sentences
       // draining. Firing here would stack two queues into the same warm
       // audio element and silently drop the in-flight onended handlers.
       if (isSpeakingRef.current) return;
+      // The user's turn comes first: a ping while the mic was open cut them
+      // off mid-sentence. Pings pause during a hands-free conversation and
+      // resume once it ends (10 s of silence, or the user stops it).
+      if (isMicBusy()) return;
 
       lastVisionPingTimeRef.current = Date.now();
-      const prompt = visionPrompts[promptIndex % visionPrompts.length];
+      const prompt = VISION_PROMPTS[promptIndex % VISION_PROMPTS.length];
       promptIndex++;
       console.log('Auto-vision ping:', prompt);
       try {
@@ -308,12 +403,16 @@ export function ChatInterface() {
       setMessages(saved);
     }
     setVisionInterval(getStoredVisionInterval());
-    const storedPid = getStoredPersonalityId();
+    let storedPid = getStoredPersonalityId();
+    // A custom personality deleted since (or in another tab) would make every
+    // message fail; start with the default one instead.
+    if (isCustomId(storedPid) && !getCustomPersonality(storedPid)) {
+      storedPid = DEFAULT_PERSONALITY_ID;
+      setStoredPersonalityId(storedPid);
+    }
     setPersonalityId(storedPid);
     personalityRef.current = storedPid;
-    // Set voice to match personality
-    const p = getPersonality(storedPid);
-    setStoredVoiceId(p.voiceId);
+    applyPersonalityVoice(storedPid);
     // Audit fix: rehydrate the persisted autoSpeak preference.
     try {
       const stored = localStorage.getItem('jaisus-auto-speak');
@@ -361,9 +460,19 @@ export function ChatInterface() {
 
   // Streaming TTS: feed sentences to the queue as they arrive during streaming
   useEffect(() => {
-    if (!autoSpeak || messages.length === 0) return;
+    // Keep prevStatusRef current while auto-speak is off, or turning it back
+    // on would flush a stale tail of an old reply.
+    if (!autoSpeak) {
+      prevStatusRef.current = status;
+      return;
+    }
+    if (messages.length === 0) return;
     const lastMessage = messages[messages.length - 1];
     if (lastMessage.role !== 'assistant') return;
+    if (lastMessage.id === mutedMessageIdRef.current) {
+      prevStatusRef.current = status;
+      return;
+    }
 
     const rawText = lastMessage.parts
       .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
@@ -373,17 +482,19 @@ export function ChatInterface() {
     if (!rawText) return;
 
     const { lastEmotion, cleanText: fullText } = stripAllEmotionTags(rawText);
-    if (lastEmotion !== 'neutral') {
+    // Each reply sets its own emotion (neutral included), so an old one
+    // doesn't carry over into it.
+    if (status === 'streaming') {
       setCurrentEmotion(lastEmotion);
     }
 
     if (status === 'streaming' && activeMessageIdRef.current !== lastMessage.id) {
       // Dedup: if the AI SDK replaces the message object with a new ID but same text, don't re-speak.
       // Audit fix: previously we set activeMessageIdRef.current = id and returned WITHOUT resetting
-      // spokenLengthRef/queuedSentencesRef. Subsequent streaming tokens then ran the splitter
+      // spokenLengthRef. Subsequent streaming tokens then ran the splitter
       // against the new message's text using the OLD spokenLength offset → wrong chunks queued.
       // Now: seed spokenLength to the already-spoken text length so further streaming picks up
-      // cleanly from there, and start a fresh queued-sentences set scoped to this new id.
+      // cleanly from there.
       //
       // Audit fix (race #9): the equality dedup is only valid for the SAME
       // message ID swap. If a regenerate / retry produces a new message ID
@@ -398,7 +509,6 @@ export function ChatInterface() {
       ) {
         activeMessageIdRef.current = lastMessage.id;
         spokenLengthRef.current = fullText.length;
-        queuedSentencesRef.current = new Set();
         prevStatusRef.current = status;
         return;
       }
@@ -407,11 +517,13 @@ export function ChatInterface() {
       lastSpokenTextRef.current = '';
       lastSpokenMessageIdRef.current = null;
       activeMessageIdRef.current = lastMessage.id;
-      startSpeaking();
       spokenLengthRef.current = 0;
-      queuedSentencesRef.current = new Set();
     }
 
+    // startSpeaking() runs only when a sentence is actually queued, in the
+    // same batch as the queue's isSpeaking = true. Calling it on the first
+    // token made the speaking state flicker until the first sentence was done.
+    // spokenLengthRef makes sure each part of the text is queued once.
     if (status === 'streaming' || (prevStatusRef.current === 'streaming' && status === 'ready')) {
       const unprocessed = fullText.slice(spokenLengthRef.current);
       // Split on sentence-ending punctuation
@@ -421,13 +533,10 @@ export function ChatInterface() {
       while ((match = sentenceRegex.exec(unprocessed)) !== null) {
         const trimmed = match[0].trim();
         // Break long sentences (>120 chars) at em-dashes or commas to avoid TTS timeouts
-        const chunks = trimmed.length > 120
-          ? trimmed.split(/(?<=[,;])\s+| — |—/).filter(c => c.trim().length > 3)
-          : [trimmed];
-        for (const chunk of chunks) {
-          const c = chunk.trim();
-          if (c.length > 5 && !queuedSentencesRef.current.has(c)) {
-            queuedSentencesRef.current.add(c);
+        const chunks = trimmed.length > 120 ? splitLongSentence(trimmed) : [trimmed];
+        for (const c of chunks) {
+          if (isSpeakable(c)) {
+            startSpeaking();
             queueSentence(c);
           }
         }
@@ -441,13 +550,11 @@ export function ChatInterface() {
     // Audit fix (race #10): also flush on 'error' transition, not only
     // 'ready'. If a network drop or server abort flips status straight to
     // 'error', the end-of-stream queueSentence(null) sentinel would never
-    // be sent, processQueue would block forever on its 100ms wait, and
-    // lastQueuedRef would retain the final sentence — silently muting it
-    // on the next legitimate stream.
+    // be sent and processQueue would block forever on its 100ms wait.
     if (prevStatusRef.current === 'streaming' && (status === 'ready' || status === 'error')) {
       const remaining = fullText.slice(spokenLengthRef.current).trim();
-      if (remaining.length > 5 && !queuedSentencesRef.current.has(remaining)) {
-        queuedSentencesRef.current.add(remaining);
+      if (isSpeakable(remaining)) {
+        startSpeaking();
         queueSentence(remaining);
       }
       queueSentence(null);
@@ -461,24 +568,61 @@ export function ChatInterface() {
 
   useEffect(() => {
     if (!isSpeaking && voiceState === 'speaking') {
+      // Speech was stopped from elsewhere (a panel's player) while the reply
+      // is still streaming: don't start speaking it again on the next token.
+      if (statusRef.current === 'streaming' && activeMessageIdRef.current) {
+        mutedMessageIdRef.current = activeMessageIdRef.current;
+      }
       activeMessageIdRef.current = null;
+      setCurrentEmotion('neutral');
       reset();
     }
   }, [isSpeaking, voiceState, reset]);
+
+  // A request that ends without any speech (auto-speak off, a chat error, an
+  // abort) has to leave 'processing' too; only startSpeaking() did before.
+  // Keyed to the busy -> idle transition because 'processing' starts a moment
+  // before useChat reports 'submitted'. Functional, so a startSpeaking() from
+  // the final flush in the same commit wins.
+  const prevChatStatusRef = useRef(status);
+  useEffect(() => {
+    const wasBusy = prevChatStatusRef.current === 'submitted' || prevChatStatusRef.current === 'streaming';
+    prevChatStatusRef.current = status;
+    if (wasBusy && status !== 'submitted' && status !== 'streaming') {
+      setVoiceState(s => (s === 'processing' ? 'idle' : s));
+      // A failed request ends the hands-free conversation; the error banner
+      // says what happened, and the mic doesn't reopen on its own.
+      if (status === 'error') voiceLoopActiveRef.current = false;
+    }
+  }, [status, setVoiceState]);
+
+  // A question asked while a reply was still on its way (see sendText),
+  // sent once the stopped request has ended. Declared after the effect above
+  // so its 'processing' wins over the reset there.
+  const pendingSendRef = useRef<{ text: string; voice: boolean } | null>(null);
+  useEffect(() => {
+    if (isChatBusy(status) || !pendingSendRef.current) return;
+    const { text, voice } = pendingSendRef.current;
+    pendingSendRef.current = null;
+    if (voice) startProcessing();
+    sendMessage({ text });
+  }, [status, sendMessage, startProcessing]);
 
   // First time we hit speaking state in a session, and consent hasn't been
   // decided yet, surface the one-time consent prompt. The ref guard ensures
   // it only shows once per page-load even if the user toggles in/out of
   // speaking state multiple times. We also avoid stacking on top of
   // onboarding (looks awful, the user will dismiss without reading).
+  // Nor over an open panel or the notification prompt: it waits for the next
+  // reply instead (the ref is only set once it actually shows).
   useEffect(() => {
     if (vadConsent !== null) return;
     if (vadPromptShownRef.current) return;
     if (voiceState !== 'speaking') return;
-    if (showOnboarding) return;
+    if (showOnboarding || showNotificationPrompt || activePanel !== 'none') return;
     vadPromptShownRef.current = true;
     setShowVADPrompt(true);
-  }, [vadConsent, voiceState, showOnboarding]);
+  }, [vadConsent, voiceState, showOnboarding, showNotificationPrompt, activePanel]);
 
   // VAD hook — fully dormant unless consent is granted AND jAIsus is
   // currently speaking. When it detects sustained voice activity, it
@@ -490,14 +634,15 @@ export function ChatInterface() {
   // speaking, jAIsus would go quiet but their voice was lost into
   // the void. They had to tap the mic AGAIN to be heard.
   useVoiceActivityDetection({
-    enabled: vadConsent === 'accepted' && voiceState === 'speaking',
+    enabled: vadConsent === 'accepted' && voiceState === 'speaking' && !anyModalOpen,
     onSpeechStart: () => {
       // Barge-in is the clearest possible signal that the user wants
       // voice mode — they're literally interrupting with their voice.
-      // Arm the hands-free loop.
-      voiceLoopActiveRef.current = true;
-      stopSpeaking();
-      reset();
+      // Arm the hands-free loop (it only runs with auto-speak on).
+      voiceLoopActiveRef.current = autoSpeak;
+      // Also ends a reply still streaming, so the user's words don't start a
+      // second request alongside it.
+      interruptSpeech(true);
       // Tiny delay lets the TTS audio element release the mic resources
       // before recognition tries to acquire them. Without it, some
       // browsers (Safari especially) fail to start recognition because
@@ -528,7 +673,12 @@ export function ChatInterface() {
   useEffect(() => {
     if (!mounted) return;
     if (notifPromptShownRef.current) return;
-    if (showOnboarding || showVADPrompt) return;
+    if (showOnboarding || showVADPrompt || activePanel !== 'none') return;
+    // Not in the middle of a reply or the user's turn to talk.
+    if (isChatBusy(status) || isSpeaking || voiceState === 'listening') return;
+    // Nothing to offer where push can't work (iOS Safari outside the Home
+    // Screen app) or the browser already has an answer for this site.
+    if (!isPushSupported() || getPermissionState() !== 'default') return;
     if (hasSeenNotificationPrompt()) return;
     // Audit fix: previously this filtered all messages on every render —
     // a long thread would do O(N) work per keystroke. Now we bail early if
@@ -538,90 +688,122 @@ export function ChatInterface() {
     if (messages.length < 4) return;
     let visibleCount = 0;
     for (const m of messages) {
-      if (m.role !== 'user') {
-        visibleCount++;
-      } else {
-        const text = m.parts
-          ?.filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
-          .map((p) => p.text)
-          .join('') ?? '';
-        if (!(text.startsWith('(') && text.endsWith(')'))) visibleCount++;
-      }
+      if (!isVisionPing(m)) visibleCount++;
       if (visibleCount >= 4) break;
     }
     if (visibleCount < 4) return;
     notifPromptShownRef.current = true;
     setShowNotificationPrompt(true);
-  }, [messages, showOnboarding, showVADPrompt, mounted]);
+  }, [messages, showOnboarding, showVADPrompt, mounted, activePanel, status, isSpeaking, voiceState]);
 
-  // Auto-scroll the chat to the latest message, but only when the user is
-  // already near the bottom. Previously this fired on every streaming token
-  // with `behavior: 'smooth'`, which:
-  //   1. Hijacked the page scroll if the user scrolled up to re-read.
-  //   2. Jank-locked iOS Safari during long streams (queued smooth-scrolls
-  //      compete with the user's touch-scroll inertia).
-  // Now: 'auto' instead of 'smooth', and only scrolls if the user is within
-  // 120px of the bottom (i.e., they hadn't deliberately scrolled away).
+  // Text mode: auto-scroll to the latest message, but only while the user is
+  // near the bottom, so scrolling up to re-read isn't undone by every token.
+  // The page scrolls, not the list (it has no height limit). The position is
+  // measured on scroll, before new content grows the page: a new bubble can
+  // be taller than the threshold.
+  const atBottomRef = useRef(true);
   useEffect(() => {
-    const end = chatEndRef.current;
-    if (!end) return;
-    // Find the scrollable ancestor. The chat list lives inside an
-    // overflow-y-auto container; if we can't find one, fall back to the
-    // viewport so the behavior degrades gracefully.
-    let scroller: HTMLElement | null = end.parentElement;
-    while (scroller && scroller !== document.body) {
-      const style = window.getComputedStyle(scroller);
-      if (style.overflowY === 'auto' || style.overflowY === 'scroll') break;
-      scroller = scroller.parentElement;
+    const update = () => {
+      atBottomRef.current =
+        window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 120;
+    };
+    window.addEventListener('scroll', update, { passive: true });
+    return () => window.removeEventListener('scroll', update);
+  }, []);
+  useEffect(() => {
+    if (!chatEndRef.current || messages.length === 0) return;
+    // The user's own question always comes into view.
+    if (status === 'submitted') atBottomRef.current = true;
+    if (atBottomRef.current) {
+      // The very bottom, so the sticky input bar sits below the last message
+      // instead of over it.
+      window.scrollTo({ top: document.documentElement.scrollHeight });
     }
-    const nearBottom = scroller && scroller !== document.body
-      ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120
-      : window.innerHeight + window.scrollY > document.body.offsetHeight - 120;
-    if (nearBottom) {
-      end.scrollIntoView({ behavior: 'auto', block: 'nearest' });
-    }
-  }, [messages]);
+  }, [messages, status, autoSpeak]);
+
+  // Voice-mode transcript box: keep the newest lines in view, unless the user
+  // has scrolled up inside it.
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const transcriptAtBottomRef = useRef(true);
+  useEffect(() => {
+    const box = transcriptRef.current;
+    if (box && transcriptAtBottomRef.current) box.scrollTop = box.scrollHeight;
+  }, [messages, showTranscript]);
 
   // Hands-free conversation flag (user request: "i press mic, jesus
   // answers, i have to press mic again. would be better if he would
   // just listen"). When the user initiates a voice turn (via the mic
   // button OR a barge-in), this flips true. After TTS finishes
   // speaking, an effect below auto-restarts recognition for the next
-  // turn. Reset by:
+  // turn. Only armed with auto-speak on (the loop can't run without it).
+  // Reset by:
   //   - User typing a text message (back to text mode)
   //   - User manually stopping TTS / recognition (explicit pause)
-  //   - User clearing history
-  //   - Errors (network, permission)
+  //   - User clearing history, or toggling auto-speak
+  //   - A listen that hears nothing for 10 s, or a recognition error
+  //   - A failed chat request
   const voiceLoopActiveRef = useRef(false);
 
-  const handleVoiceResult = useCallback((transcript: string) => {
+  // Every path that starts listening arms voiceLoopActiveRef itself, so a
+  // result must not re-arm it: that undid a manual stop or Clear history.
+  const handleVoiceResult = (transcript: string) => {
     console.log('handleVoiceResult called:', transcript);
-    voiceLoopActiveRef.current = true;
-    startProcessing();
-    try {
-      sendMessage({ text: transcript });
-    } catch (err) {
-      console.error('sendMessage error:', err);
-    }
-  }, [startProcessing, sendMessage]);
+    sendText(transcript, true);
+  };
 
-  const { interimTranscript, isListening, isSupported, error: voiceError, start: startRecognition, stop: stopRecognition } = useSpeechRecognition(handleVoiceResult);
+  // A listen that heard nothing (10 s of silence) or failed ends the
+  // hands-free loop; otherwise the mic reopened forever after silence.
+  const handleVoiceSessionEnd = useCallback((reason: SpeechSessionEnd) => {
+    if (reason !== 'result') voiceLoopActiveRef.current = false;
+  }, []);
 
+  const {
+    interimTranscript, isListening, isSupported, error: voiceError,
+    start: startRecognition, stop: stopRecognition, cancel: cancelRecognition,
+    clearError: clearVoiceError,
+  } = useSpeechRecognition(handleVoiceResult, handleVoiceSessionEnd);
+  useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
+
+  // TTS started while the mic was open: drop the partial speech rather than
+  // sending half a sentence in the middle of a reply.
   useEffect(() => {
     if (isSpeaking && isListening) {
-      stopRecognition();
+      cancelRecognition();
     }
-  }, [isSpeaking, isListening, stopRecognition]);
+  }, [isSpeaking, isListening, cancelRecognition]);
+
+  // Same when a panel or prompt opens over a live mic. The hands-free loop
+  // stays armed, so the mic reopens once it closes.
+  useEffect(() => {
+    if (anyModalOpen && isListening) {
+      cancelRecognition();
+    }
+  }, [anyModalOpen, isListening, cancelRecognition]);
+
+  // Voice errors are shown for a while, not until the next listen.
+  useEffect(() => {
+    if (!voiceError) return;
+    const t = setTimeout(clearVoiceError, 8000);
+    return () => clearTimeout(t);
+  }, [voiceError, clearVoiceError]);
+
+  useEffect(() => {
+    const update = () => setPageHidden(document.hidden);
+    document.addEventListener('visibilitychange', update);
+    return () => document.removeEventListener('visibilitychange', update);
+  }, []);
 
   // Hands-free: when TTS finishes AND the conversation is in voice mode,
   // automatically re-arm recognition for the next user turn. Guards:
   //   - voiceLoopActiveRef: user must have started this leg by voice
   //   - !isSpeaking: TTS has actually finished
   //   - !isListening: not already listening
-  //   - status === 'ready': chat is idle (not mid-stream)
+  //   - chat is idle (not mid-stream)
   //   - isSupported: browser has recognition
   //   - autoSpeak: only in voice-first mode (text mode users shouldn't
   //     suddenly find their mic listening)
+  //   - no panel or prompt open, page visible: the loop waits and resumes
+  //     once it closes or the user comes back
   const autoListenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     // Clear any pending timer when conditions change.
@@ -633,7 +815,8 @@ export function ChatInterface() {
     if (!autoSpeak) return;
     if (!isSupported) return;
     if (isSpeaking || isListening) return;
-    if (status !== 'ready') return;
+    if (isChatBusy(status)) return;
+    if (anyModalOpen || pageHidden) return;
 
     // Defer slightly so the user has a beat after TTS ends to interrupt
     // (e.g., turn off the mic if they're done) and so the audio output
@@ -643,7 +826,8 @@ export function ChatInterface() {
       // Re-check conditions at fire time (state may have changed).
       if (!voiceLoopActiveRef.current) return;
       if (isSpeakingRef.current) return;
-      if (statusRef.current !== 'ready') return;
+      if (isChatBusy(statusRef.current)) return;
+      if (document.hidden) return;
       console.log('Hands-free: auto-restarting recognition');
       startRecognition();
     }, 500);
@@ -654,7 +838,16 @@ export function ChatInterface() {
         autoListenTimerRef.current = null;
       }
     };
-  }, [isSpeaking, isListening, status, autoSpeak, isSupported, startRecognition]);
+  }, [isSpeaking, isListening, status, autoSpeak, isSupported, startRecognition, anyModalOpen, pageHidden]);
+
+  // It's the user's turn to talk: the mic is open, about to reopen, or a
+  // hands-free conversation is going on. Camera pings wait for it.
+  function isMicBusy() {
+    return isListeningRef.current
+      || voiceLoopActiveRef.current
+      || autoListenTimerRef.current !== null
+      || voiceToggleTimerRef.current !== null;
+  }
 
   useEffect(() => {
     if (isListening) {
@@ -678,28 +871,75 @@ export function ChatInterface() {
     };
   }, []);
 
+  // Every message the user sends goes through here. A question asked while
+  // a reply is still on its way (a voice result, a panel's "Ask") stops that
+  // reply and is sent once the stopped request has ended: two requests at
+  // once duplicated and interleaved the replies.
+  function sendText(text: string, voice = false) {
+    clearVoiceError();
+    recordActivity();
+    if (isChatBusy(status)) {
+      pendingSendRef.current = { text, voice };
+      interruptSpeech(true);
+    } else {
+      sendMessage({ text });
+    }
+    if (voice) startProcessing();
+  }
+
   function handleTextSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!input.trim() || status !== 'ready') return;
+    if (!input.trim() || isChatBusy(status)) return;
     // Text input means the user is in keyboard mode — exit the hands-free
     // voice loop so the mic doesn't auto-re-arm after the reply finishes.
     voiceLoopActiveRef.current = false;
-    sendMessage({ text: input });
+    sendText(input);
     setInput('');
   }
 
+  function handleInputChange(value: string) {
+    setInput(value);
+    if (voiceError) clearVoiceError();
+  }
+
   function handleAskAbout(prompt: string) {
-    sendMessage({ text: prompt });
+    sendText(prompt);
+  }
+
+  function handleRetry() {
+    if (messages.length === 0) {
+      clearChatError();
+      return;
+    }
+    // Drops a half-written reply and asks the last question again.
+    regenerate().catch(err => console.warn('Retry failed:', err));
   }
 
   function handleAskQuestion() {
     if (isSupported) {
-      // User explicitly tapped "Ask a Question" — they're choosing voice
-      // mode, so enable the hands-free loop.
-      voiceLoopActiveRef.current = true;
+      // User explicitly tapped "Ask a Question". The hands-free loop only
+      // runs with auto-speak on.
+      voiceLoopActiveRef.current = autoSpeak;
       startRecognition();
     }
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  // Stops jAIsus mid-reply. A reply still streaming is muted, so the
+  // streaming-TTS effect doesn't resume it with the next sentence or restart
+  // it from the first. stopStream also aborts the stream, for when the user is
+  // about to say something new (two requests at once would collide).
+  function interruptSpeech(stopStream = false) {
+    const busy = status === 'submitted' || status === 'streaming';
+    const last = messages[messages.length - 1];
+    if (status === 'streaming' && last?.role === 'assistant') {
+      mutedMessageIdRef.current = last.id;
+    }
+    if (stopStream && busy) {
+      try { stopChat(); } catch { /* may not be available */ }
+    }
+    stopSpeaking();
+    reset();
   }
 
   function handleVoiceToggle() {
@@ -713,23 +953,48 @@ export function ChatInterface() {
       voiceToggleTimerRef.current = null;
     }
     if (voiceState === 'listening') {
-      // Manual stop while listening — user wants to pause the conversation.
-      // Exit the hands-free loop so we don't immediately re-listen after.
+      // Manual stop while listening: send what was said so far and keep the
+      // hands-free loop going; with nothing said, pause the conversation.
+      const sent = stopRecognition();
+      voiceLoopActiveRef.current = sent && autoSpeak;
+    } else if (voiceState === 'processing') {
+      // The amber button while thinking means "stop": cancel the question
+      // and end the hands-free loop rather than opening the mic.
       voiceLoopActiveRef.current = false;
-      stopRecognition();
+      pendingSendRef.current = null;
+      interruptSpeech(true);
     } else if (voiceState === 'speaking' || isSpeaking) {
-      // Manual interrupt while TTS plays. User wants to talk → arm voice
-      // loop and start recognition after a short delay.
-      voiceLoopActiveRef.current = true;
-      stopSpeaking();
-      reset();
-      voiceToggleTimerRef.current = setTimeout(() => {
-        voiceToggleTimerRef.current = null;
-        startRecognition();
-      }, 150);
+      // Bug fix (audit): distinguish the two meanings of "tap mic during TTS":
+      //   - If the hands-free loop is ALREADY armed, the user is asking to
+      //     STOP the conversation (they'd otherwise get auto-restarted after
+      //     this reply finishes). Kill TTS, disarm the loop, do NOT start
+      //     recognition. Without this branch there was NO way to exit the
+      //     hands-free loop while jAIsus was speaking.
+      //   - Otherwise (they typed the last message, so loop is off) they're
+      //     barging in to say something new. Kill TTS, arm the loop, start
+      //     recognition after a short delay.
+      const wasLoopArmed = voiceLoopActiveRef.current;
+      // Barging in also ends the stream; stopping keeps its text on screen.
+      interruptSpeech(!wasLoopArmed);
+      if (wasLoopArmed) {
+        voiceLoopActiveRef.current = false;
+      } else {
+        voiceLoopActiveRef.current = autoSpeak;
+        voiceToggleTimerRef.current = setTimeout(() => {
+          voiceToggleTimerRef.current = null;
+          startRecognition();
+        }, 150);
+      }
     } else {
-      // Fresh mic press from idle — arm hands-free loop.
-      voiceLoopActiveRef.current = true;
+      // Fresh mic press from idle — arm hands-free loop (voice mode only).
+      // With a spoken reply on its way, the user is talking over it: drop
+      // the reply, or its speech would cut this listen off as soon as it
+      // started. A text-mode reply keeps streaming until the question is
+      // actually sent (sendText stops it then).
+      if (autoSpeak && (status === 'submitted' || status === 'streaming')) {
+        interruptSpeech(true);
+      }
+      voiceLoopActiveRef.current = autoSpeak;
       startRecognition();
     }
   }
@@ -737,11 +1002,19 @@ export function ChatInterface() {
   function handleClearHistory() {
     // Clearing history exits the hands-free loop too.
     voiceLoopActiveRef.current = false;
+    // Also discard any speech in progress, which would otherwise be sent
+    // into the freshly cleared conversation.
+    cancelRecognition();
     // Audit fix: abort the in-flight chat stream FIRST. Without this, a clear
     // during streaming would let tokens keep arriving on a destroyed message,
     // useChat would re-insert under a new ID, and the streaming-TTS effect
     // would re-engage with stale spokenLength / activeMessageId state.
-    try { stopChat(); } catch { /* useChat may not expose stop in some states */ }
+    // Muting the reply covers tokens already on their way. Also stops speech
+    // and leaves 'processing'.
+    interruptSpeech(true);
+    pendingSendRef.current = null;
+    clearChatError();
+    setCurrentEmotion('neutral');
 
     // Before wiping, save a one-sentence summary of the conversation so jAIsus
     // can carry a thread of memory into the next session. Best-effort, async,
@@ -753,10 +1026,8 @@ export function ChatInterface() {
     // conversation can't re-fire next time. Previously: prevStatusRef stayed
     // 'streaming' if a clear happened mid-stream, causing the next message to
     // skip the start-up branch and replay sentences from the old activeMessageId.
-    stopSpeaking();
     prevStatusRef.current = 'ready';
     spokenLengthRef.current = 0;
-    queuedSentencesRef.current.clear();
     activeMessageIdRef.current = null;
     lastSpokenTextRef.current = '';
     lastSpokenMessageIdRef.current = null;
@@ -771,17 +1042,51 @@ export function ChatInterface() {
     // are passed to TTS with the NEW personality's voice — old text in a
     // new voice. Aborting the stream is the least-surprising behavior;
     // the user can re-ask under the new persona.
-    if (status === 'submitted' || status === 'streaming') {
-      try { stopChat(); } catch { /* may not be available */ }
-      stopSpeaking();
+    // Speech is stopped even once the text has finished streaming: TTS lags
+    // the stream, and the rest would be read in the new personality's voice.
+    const busy = status === 'submitted' || status === 'streaming';
+    if (busy || (isSpeaking && id !== personalityRef.current)) {
+      interruptSpeech(true);
+    }
+    if (busy) {
+      // Bug fix (audit): also reset the streaming-TTS effect state so the
+      // NEXT message starts cleanly. Without this, activeMessageIdRef +
+      // prevStatusRef stayed at their mid-stream values; the next reply
+      // would take the end-of-stream flush path with a spurious null
+      // sentinel before the new-message branch ever ran.
+      prevStatusRef.current = 'ready';
+      spokenLengthRef.current = 0;
+      activeMessageIdRef.current = null;
+      lastSpokenTextRef.current = '';
+      lastSpokenMessageIdRef.current = null;
     }
     setPersonalityId(id);
     personalityRef.current = id;
     setStoredPersonalityId(id);
     // Auto-switch voice to match personality
-    const p = getPersonality(id);
-    setStoredVoiceId(p.voiceId);
+    applyPersonalityVoice(id);
   }
+
+  // The active custom personality was deleted (here or in another tab): every
+  // message would fail with it, so fall back to the default personality.
+  const dropMissingPersonality = useEffectEvent(() => {
+    const id = personalityRef.current;
+    if (isCustomId(id) && !getCustomPersonality(id)) {
+      handlePersonalityChange(DEFAULT_PERSONALITY_ID);
+    }
+  });
+  useEffect(() => {
+    const onChange = () => dropMissingPersonality();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'jaisus-custom-personalities' || e.key === null) dropMissingPersonality();
+    };
+    window.addEventListener(CUSTOM_CHANGED_EVENT, onChange);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(CUSTOM_CHANGED_EVENT, onChange);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
 
   function handleVisionIntervalChange(seconds: number) {
     setVisionInterval(seconds);
@@ -790,8 +1095,26 @@ export function ChatInterface() {
     } catch { /* */ }
   }
 
+  const chatErrorBanner = chatError ? (
+    <div
+      role="alert"
+      className="flex items-center justify-center gap-2 py-1.5 pl-3 pr-1.5 bg-amber-50/90 border border-amber-200 rounded-lg text-amber-700 text-xs mb-2 animate-fade-in"
+    >
+      <span className="text-left">{chatErrorMessage(chatError)}</span>
+      <button
+        type="button"
+        onClick={handleRetry}
+        className="shrink-0 min-h-9 rounded-md bg-amber-100 px-3 font-semibold text-amber-800 active:scale-95 transition-transform"
+      >
+        Try again
+      </button>
+    </div>
+  ) : null;
+
   return (
-    <div className="flex flex-col min-h-screen bg-stone-50">
+    // dvh, not 100vh: mobile browsers size vh to the screen without their
+    // toolbars, which pushed content below the visible bottom.
+    <div className="flex flex-col min-h-screen [@supports(height:1dvh)]:min-h-dvh bg-stone-50">
       <div className="flex-1 flex flex-col max-w-md mx-auto w-full">
         <HeroSection voiceState={voiceState} interimTranscript={interimTranscript} emotion={currentEmotion} />
 
@@ -802,98 +1125,123 @@ export function ChatInterface() {
             BEHIND the sticky bar — completely unreachable. Moved into the
             sticky bottom container below so it's always above the input. */}
 
-        {!autoSpeak && (
+        {mounted && !autoSpeak && (
           <ActionButtons
             onAskQuestion={handleAskQuestion}
             onOpenPanel={setActivePanel}
           />
         )}
 
-        {autoSpeak ? (
+        {/* The layout depends on a saved setting that is read after mount.
+            Until then neither layout is shown, so users with auto-speak off
+            don't see the voice layout first and then a jump. */}
+        {!mounted ? (
+          <div className="flex-1" aria-hidden="true" />
+        ) : autoSpeak ? (
           <>
             <div className="flex-1" />
 
-            {/* Camera preview + scene caption */}
-            <div className={`px-4 pb-2 ${cameraActive ? '' : 'hidden'}`}>
-              <div className="flex items-end gap-3 justify-center">
-                <div className="relative w-20 h-20 rounded-xl overflow-hidden border-2 border-amber-400/50 shadow-lg flex-shrink-0">
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="w-full h-full object-cover"
-                    style={{ transform: 'scaleX(-1)' }}
-                  />
-                </div>
-                {sceneDescription && (
-                  <div className="bg-stone-800/80 backdrop-blur-sm rounded-xl px-3 py-2 max-w-[220px] shadow-md">
-                    <p className="text-xs text-stone-200 leading-relaxed">{sceneDescription}</p>
+            {/* Floating buttons + text input: settings, mic, camera, transcript.
+                The camera preview, status lines and transcript are in this
+                sticky bar too: on phones the hero and the bar are taller than
+                the screen, and anything between them ended up behind the bar. */}
+            <div
+              ref={bottomBarRef}
+              className="sticky bottom-0 bg-stone-50/90 backdrop-blur-sm px-4 py-3"
+              // UX audit fix: respect the iPhone home-indicator safe area so
+              // the mic button doesn't sit under the indicator's touch region.
+              // Keyboard-open padding takes precedence when the soft keyboard
+              // is up (visualViewport tracks that separately).
+              style={{
+                paddingBottom: keyboardHeight > 0
+                  ? 12 + keyboardHeight
+                  : 'max(12px, env(safe-area-inset-bottom))',
+              }}
+            >
+              {/* Camera preview + scene caption */}
+              <div className={`pb-2 ${cameraActive ? '' : 'hidden'}`}>
+                <div className="flex items-end gap-3 justify-center">
+                  <div className="relative w-20 h-20 rounded-xl overflow-hidden border-2 border-amber-400/50 shadow-lg flex-shrink-0">
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="w-full h-full object-cover"
+                      style={{ transform: 'scaleX(-1)' }}
+                    />
                   </div>
-                )}
+                  {sceneDescription && (
+                    <div className="bg-stone-800/80 backdrop-blur-sm rounded-xl px-3 py-2 max-w-[220px] shadow-md">
+                      <p className="text-xs text-stone-200 leading-relaxed">{sceneDescription}</p>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
 
-            {/* Status indicators */}
-            <div className="px-4 py-3 text-center">
-              {(voiceError || cameraError) && (
-                <div className="py-2 px-3 bg-amber-50/90 border border-amber-200 rounded-lg text-amber-700 text-xs mb-2">
-                  {voiceError || cameraError}
+              {/* Status indicators */}
+              {(voiceError || cameraError || chatError || isChatBusy(status) || isSpeaking) && (
+                <div className="text-center">
+                  {(voiceError || cameraError) && (
+                    <div className="py-2 px-3 bg-amber-50/90 border border-amber-200 rounded-lg text-amber-700 text-xs mb-2">
+                      {voiceError || cameraError}
+                    </div>
+                  )}
+                  {chatErrorBanner}
+                  {isChatBusy(status) && !isSpeaking && (
+                    <div className="flex items-center justify-center gap-2 py-2 text-stone-400 text-xs">
+                      <div className="flex gap-1">
+                        {[0, 1, 2].map(i => (
+                          <div key={i} className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+                        ))}
+                      </div>
+                      <span>thinking...</span>
+                    </div>
+                  )}
+                  {isSpeaking && (
+                    <div className="flex items-center justify-center gap-2 py-2 text-amber-600 text-xs">
+                      <div className="flex gap-1">
+                        {[0, 1, 2, 3, 4].map(i => {
+                          const heights = [12, 14, 10, 15, 11];
+                          return (
+                            <div key={i} className="w-1 rounded-full bg-amber-400 animate-pulse" style={{ height: `${heights[i]}px`, animationDelay: `${i * 0.15}s` }} />
+                          );
+                        })}
+                      </div>
+                      <span>speaking...</span>
+                    </div>
+                  )}
                 </div>
               )}
-              {(status === 'submitted' || status === 'streaming') && (
-                <div className="flex items-center justify-center gap-2 py-2 text-stone-400 text-xs">
-                  <div className="flex gap-1">
-                    {[0, 1, 2].map(i => (
-                      <div key={i} className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
-                    ))}
-                  </div>
-                  <span>thinking...</span>
-                </div>
-              )}
-              {isSpeaking && (
-                <div className="flex items-center justify-center gap-2 py-2 text-amber-600 text-xs">
-                  <div className="flex gap-1">
-                    {[0, 1, 2, 3, 4].map(i => {
-                      const heights = [12, 14, 10, 15, 11];
+
+              {/* Transcript overlay */}
+              {showTranscript && messages.length > 0 && (
+                <div
+                  ref={transcriptRef}
+                  onScroll={e => {
+                    const box = e.currentTarget;
+                    transcriptAtBottomRef.current = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+                  }}
+                  className="mb-2 max-h-48 overflow-y-auto rounded-xl"
+                >
+                  <div className="bg-black/60 backdrop-blur-sm rounded-xl p-3 space-y-2">
+                    {messages.map(message => {
+                      if (isVisionPing(message)) return null;
+                      const rawMsgText = messageText(message);
+                      const displayText = message.role === 'assistant'
+                        ? stripPartialEmotionTag(stripAllEmotionTags(rawMsgText).cleanText)
+                        : rawMsgText;
                       return (
-                        <div key={i} className="w-1 rounded-full bg-amber-400 animate-pulse" style={{ height: `${heights[i]}px`, animationDelay: `${i * 0.15}s` }} />
+                        <div key={message.id} className={`text-xs [overflow-wrap:anywhere] ${message.role === 'user' ? 'text-teal-300' : 'text-stone-200'}`}>
+                          <span className="font-bold">{message.role === 'user' ? 'You' : 'jAIsus'}:</span>{' '}
+                          {displayText}
+                        </div>
                       );
                     })}
                   </div>
-                  <span>speaking...</span>
                 </div>
               )}
-            </div>
 
-            {/* Transcript overlay */}
-            {showTranscript && messages.length > 0 && (
-              <div className="px-4 pb-2 max-h-48 overflow-y-auto">
-                <div className="bg-black/60 backdrop-blur-sm rounded-xl p-3 space-y-2">
-                  {messages.map(message => {
-                    const rawMsgText = message.parts
-                      .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
-                      .map(p => p.text)
-                      .join('');
-                    // Hide auto-vision ping messages from transcript
-                    if (message.role === 'user' && rawMsgText.startsWith('(') && rawMsgText.endsWith(')')) return null;
-                    const displayText = message.role === 'assistant' ? stripAllEmotionTags(rawMsgText).cleanText : rawMsgText;
-                    return (
-                      <div key={message.id} className={`text-xs ${message.role === 'user' ? 'text-teal-300' : 'text-stone-200'}`}>
-                        <span className="font-bold">{message.role === 'user' ? 'You' : 'jAIsus'}:</span>{' '}
-                        {displayText}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Floating buttons + text input: settings, mic, camera, transcript */}
-            <div
-              className="sticky bottom-0 bg-stone-50/90 backdrop-blur-sm px-4 py-3"
-              style={keyboardHeight > 0 ? { paddingBottom: 12 + keyboardHeight } : undefined}
-            >
               {/* Personality switcher — moved into the sticky container so it's
                   always above the input row regardless of hero height.
                   Bug fix: previously had `-mx-4 px-4` on this wrapper which
@@ -902,25 +1250,23 @@ export function ChatInterface() {
                   viewport on both left and right edges. The sticky parent
                   already has px-4, so this row just needs `-mx-4` to let
                   the chip strip extend edge-to-edge for horizontal scroll. */}
-              {mounted && (
-                <div className="flex items-center gap-2 mb-2 -mx-4">
-                  <div className="flex-1 min-w-0">
-                    <PersonalitySwitcher
-                      activeId={personalityId}
-                      onChange={handlePersonalityChange}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setActivePanel('personality-creator')}
-                    className="shrink-0 mr-4 w-11 h-11 rounded-full bg-white border border-stone-200 text-stone-600 text-xl leading-none flex items-center justify-center hover:border-amber-300 active:scale-95"
-                    aria-label="Create custom personality"
-                    title="Create your own jAIsus"
-                  >
-                    +
-                  </button>
+              <div className="flex items-center gap-2 mb-2 -mx-4">
+                <div className="flex-1 min-w-0">
+                  <PersonalitySwitcher
+                    activeId={personalityId}
+                    onChange={handlePersonalityChange}
+                  />
                 </div>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setActivePanel('personality-creator')}
+                  className="shrink-0 mr-4 w-11 h-11 rounded-full bg-white border border-stone-200 text-stone-600 text-xl leading-none flex items-center justify-center hover:border-amber-300 active:scale-95"
+                  aria-label="Create custom personality"
+                  title="Create your own jAIsus"
+                >
+                  +
+                </button>
+              </div>
               {/* Text input row — always visible for keyboard questions.
                   Audit fix: explicit inputMode / autoComplete / autoCapitalize /
                   enterKeyHint so iOS doesn't autocorrect prayer/scripture
@@ -929,8 +1275,7 @@ export function ChatInterface() {
                 <input
                   type="text"
                   value={input}
-                  onChange={e => setInput(e.target.value)}
-                  disabled={status !== 'ready'}
+                  onChange={e => handleInputChange(e.target.value)}
                   placeholder="Type your question..."
                   inputMode="text"
                   enterKeyHint="send"
@@ -938,14 +1283,17 @@ export function ChatInterface() {
                   autoCorrect="off"
                   autoCapitalize="sentences"
                   spellCheck={false}
-                  className="flex-1 rounded-full border border-stone-300 bg-white px-4 py-2 text-sm
-                    focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent
-                    disabled:opacity-50"
+                  // Not disabled while jAIsus replies: that dropped focus (and closed
+                  // the phone keyboard) after every send. A send while busy is
+                  // ignored and the draft kept. 16px text, or iOS zooms the page
+                  // in when the input is focused.
+                  className="flex-1 rounded-full border border-stone-300 bg-white px-4 py-2 text-base
+                    focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent"
                 />
                 {input.trim() && (
                   <button
                     type="submit"
-                    disabled={status !== 'ready'}
+                    disabled={isChatBusy(status)}
                     className="w-11 h-11 rounded-full bg-teal-500 text-white flex items-center justify-center active:scale-95 transition-transform shadow-sm disabled:opacity-50"
                     aria-label="Send"
                   >
@@ -1007,7 +1355,10 @@ export function ChatInterface() {
                 {/* Transcript toggle */}
                 <button
                   type="button"
-                  onClick={() => setShowTranscript(!showTranscript)}
+                  onClick={() => {
+                    transcriptAtBottomRef.current = true;
+                    setShowTranscript(!showTranscript);
+                  }}
                   className={`w-11 h-11 rounded-full flex items-center justify-center active:scale-95 transition-transform shadow-sm ${
                     showTranscript ? 'bg-teal-500 text-white' : 'bg-stone-200 text-stone-500'
                   }`}
@@ -1023,15 +1374,11 @@ export function ChatInterface() {
         ) : (
           <>
             <div className="flex-1 px-4 py-2 space-y-3 overflow-y-auto border-t border-stone-200">
-              {voiceError && (
-                <div className="text-center py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-xs animate-fade-in">
-                  {voiceError}
-                </div>
-              )}
-              {messages.length === 0 && mounted && !voiceError && (
+              {messages.length === 0 && (
                 <div className="space-y-4 py-2 animate-fade-in">
                   <div className="flex justify-center">
-                    <StreakBadge />
+                    {/* The streak is recorded when the user sends something. */}
+                    <StreakBadge autoRecord={false} />
                   </div>
                   <GreetingHeader />
                   <DailyVerse />
@@ -1039,7 +1386,7 @@ export function ChatInterface() {
                   <SuggestedPrompts
                     onPick={(text) => {
                       track('suggestion.picked');
-                      sendMessage({ text });
+                      sendText(text);
                     }}
                   />
                   <MoodSelector
@@ -1047,13 +1394,19 @@ export function ChatInterface() {
                       track('mood.picked', { mood: mood.id });
                       // Compose a natural opener combining the mood label and a starter prompt
                       const text = content.promptText ?? `I'm feeling ${mood.label.toLowerCase()}.`;
-                      sendMessage({ text });
+                      sendText(text);
                     }}
                   />
                 </div>
               )}
-              {messages.map(message => (
-                <ChatMessage key={message.id} message={message} />
+              {messages.map((message, i) => (
+                isVisionPing(message) ? null : (
+                  <ChatMessage
+                    key={message.id}
+                    message={message}
+                    isStreaming={status === 'streaming' && message.role === 'assistant' && i === messages.length - 1}
+                  />
+                )
               ))}
               {status === 'submitted' && (
                 <div className="flex justify-start animate-fade-in">
@@ -1066,6 +1419,7 @@ export function ChatInterface() {
                   </div>
                 </div>
               )}
+              {chatErrorBanner}
               <div ref={chatEndRef} />
             </div>
 
@@ -1073,16 +1427,22 @@ export function ChatInterface() {
               className="sticky bottom-0 bg-stone-50/95 backdrop-blur-sm border-t border-stone-200 px-4 py-3"
               style={keyboardHeight > 0 ? { paddingBottom: 12 + keyboardHeight } : undefined}
             >
+              {/* Here rather than at the top of the list, which can be far
+                  above the screen in a long conversation. */}
+              {voiceError && (
+                <div className="text-center py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-xs mb-2 animate-fade-in">
+                  {voiceError}
+                </div>
+              )}
               <form onSubmit={handleTextSubmit} className="flex items-center gap-2">
                 <input
                   type="text"
                   value={input}
-                  onChange={e => setInput(e.target.value)}
-                  disabled={status !== 'ready'}
+                  onChange={e => handleInputChange(e.target.value)}
                   placeholder="Type your question..."
-                  className="flex-1 rounded-full border border-stone-300 bg-white px-4 py-2.5 text-sm
-                    focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent
-                    disabled:opacity-50"
+                  // Stays enabled and 16px, as in the voice-mode bar.
+                  className="flex-1 rounded-full border border-stone-300 bg-white px-4 py-2.5 text-base
+                    focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent"
                 />
                 <VoiceButton
                   voiceState={voiceState}
@@ -1119,16 +1479,36 @@ export function ChatInterface() {
         autoSpeak={autoSpeak}
         onToggleAutoSpeak={() => {
           const next = !autoSpeak;
+          // Turning it off mid-reply silences the reply; otherwise 'speaking'
+          // never ended, because the end-of-stream signal was never sent.
+          if (!next) interruptSpeech();
+          // The camera's preview and off switch exist only in voice mode, so
+          // it can't keep running in text mode.
+          if (!next && cameraActive) toggleCamera();
+          // An old hands-free flag would otherwise open the mic by itself
+          // (behind Settings) as soon as auto-speak came back on.
+          voiceLoopActiveRef.current = false;
           setAutoSpeak(next);
           try { localStorage.setItem('jaisus-auto-speak', next ? '1' : '0'); } catch { /* */ }
         }}
         onClearHistory={handleClearHistory}
-        onTestVoice={() => speak('Peace be with you, my friend. I have walked among you for two thousand years.')}
+        onTestVoice={() => {
+          // Mute a streaming reply, or its next sentences would play after the test.
+          interruptSpeech();
+          speak('Peace be with you, my friend. I have walked among you for two thousand years.');
+        }}
         visionInterval={visionInterval}
         onVisionIntervalChange={handleVisionIntervalChange}
         cameraActive={cameraActive}
         personalityId={personalityId}
         onPersonalityChange={handlePersonalityChange}
+        vadEnabled={vadConsent === 'accepted'}
+        onToggleVad={() => {
+          const next: VADConsent = vadConsent === 'accepted' ? 'declined' : 'accepted';
+          setVADConsent(next);
+          setVadConsent(next);
+        }}
+        onOpenCreator={() => setActivePanel('personality-creator')}
       />
       <CommunityPlaceholder
         isOpen={activePanel === 'community'}
@@ -1141,7 +1521,7 @@ export function ChatInterface() {
       <FavoritesPanel
         isOpen={activePanel === 'favorites'}
         onClose={() => setActivePanel('none')}
-        onAskAgain={(text) => sendMessage({ text })}
+        onAskAgain={(text) => sendText(text)}
       />
       <MemoriesPanel
         isOpen={activePanel === 'memories'}
@@ -1150,7 +1530,7 @@ export function ChatInterface() {
       <SearchPanel
         isOpen={activePanel === 'search'}
         onClose={() => setActivePanel('none')}
-        onAskAbout={(text) => sendMessage({ text })}
+        onAskAbout={(text) => sendText(text)}
       />
 
       {/* Voice memo / journal mode. Records up to 5 min, sends to /api/memo
@@ -1185,9 +1565,12 @@ export function ChatInterface() {
         isOpen={activePanel === 'personality-creator'}
         onClose={() => setActivePanel('none')}
         onSaved={(p) => {
+          // The voice just picked in the creator wins over one set in Settings.
+          setVoiceOverride(p.id, null);
           handlePersonalityChange(p.id);
         }}
         onDeleted={(deletedId) => {
+          setVoiceOverride(deletedId, null);
           // If the deleted personality was the active one, snap back to the
           // default so the transport doesn't keep sending a stale id (which
           // would silently fall back to Mushroom Guru server-side without
@@ -1212,6 +1595,8 @@ export function ChatInterface() {
           setVadConsent('declined');
           setShowVADPrompt(false);
         }}
+        // Closed without an answer: asked again on a later visit.
+        onDismiss={() => setShowVADPrompt(false)}
       />
 
       {/* Daily-verse push opt-in — surfaced after the user has had a couple
@@ -1224,10 +1609,12 @@ export function ChatInterface() {
 
       {/* SpeakingHint lives at the root, outside the scrollable chat container,
           so its `fixed` positioning is anchored to the viewport (not clipped
-          by an ancestor's overflow). */}
+          by an ancestor's overflow). In voice mode it sits just above the
+          bottom bar, not on top of the text input. */}
       <SpeakingHint
         voiceState={voiceState}
-        onInterrupt={() => stopSpeaking()}
+        onInterrupt={() => interruptSpeech()}
+        bottomPx={autoSpeak && bottomBarHeight > 0 ? bottomBarHeight + 8 : undefined}
       />
     </div>
   );

@@ -115,6 +115,16 @@ export function ParableReader({
     };
   }, [parable, stop]);
 
+  // Push toasts below the top bar so they don't cover back / favorite / share.
+  useEffect(() => {
+    if (!parable) return;
+    const style = document.documentElement.style;
+    style.setProperty('--toast-top-offset', '4.5rem');
+    return () => {
+      style.removeProperty('--toast-top-offset');
+    };
+  }, [parable]);
+
   // --- listen button handler ---
   const handleListen = useCallback(() => {
     if (!parable) return;
@@ -143,7 +153,7 @@ export function ParableReader({
       aria-modal="true"
       aria-labelledby="parable-reader-title"
       className={[
-        'fixed inset-0 z-50 bg-stone-50 overflow-hidden',
+        'fixed inset-0 z-50 bg-stone-50 overflow-hidden flex flex-col',
         'transition-transform ease-out',
         reducedMotion ? 'duration-0' : 'duration-[250ms]',
         entered ? 'translate-x-0' : 'translate-x-full',
@@ -152,8 +162,8 @@ export function ParableReader({
       // Hint to the browser that we're animating transform.
       style={{ willChange: reducedMotion ? undefined : 'transform' }}
     >
-      {/* Top bar — sticky chrome with back, listen, favorite, share. */}
-      <div className="sticky top-0 z-10 h-14 flex items-center justify-between px-3 bg-stone-50/95 backdrop-blur-sm border-b border-stone-200">
+      {/* Top bar — back, listen, favorite, share. Stays put above the scroll area. */}
+      <div className="shrink-0 z-10 h-14 flex items-center justify-between px-3 bg-stone-50/95 backdrop-blur-sm border-b border-stone-200">
         <button
           type="button"
           onClick={onClose}
@@ -236,7 +246,7 @@ export function ParableReader({
           with arrow keys / PageUp / PageDown when the dialog has focus. */}
       <div
         tabIndex={0}
-        className="overflow-y-auto h-[calc(100vh-3.5rem)] focus:outline-none"
+        className="flex-1 min-h-0 overflow-y-auto focus:outline-none"
       >
         <article className="max-w-2xl mx-auto px-6 py-8">
           <p className="text-sm uppercase tracking-widest text-amber-700 font-medium">

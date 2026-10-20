@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { EMOTION_VIDEO_MAP, type Emotion } from '@/lib/emotions';
 
 interface AnimatedJesusProps {
+  /** Not used yet; if a speaking visual is added, read it through a ref so the canvas animation doesn't restart. */
   isSpeaking?: boolean;
   emotion?: Emotion;
 }
@@ -31,7 +32,7 @@ const VIDEO_PLAYLIST = [
 // Stop playback at 7s16f (7.667s) out of 8s clips — last 8 frames skipped in playback.
 const SKIP_END_SECONDS = 0.333;
 
-export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: AnimatedJesusProps) {
+export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
   const videoARef = useRef<HTMLVideoElement>(null);
   const videoBRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -548,7 +549,7 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
 
     animate();
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [mode, imageLoaded, isSpeaking]);
+  }, [mode, imageLoaded]);
 
   // Video mode — dual elements but only one decoder active at a time
   if (mode === 'video') {
@@ -563,14 +564,23 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
           muted
           playsInline
           className="absolute inset-0 w-full h-full object-cover object-top"
-          style={{ filter: 'brightness(1.05) contrast(1.02)' }}
+          // Keep the portrait's aspect ratio even before Tailwind finishes loading.
+          style={{
+            objectFit: 'cover',
+            objectPosition: 'top',
+            filter: 'brightness(1.05) contrast(1.02)',
+          }}
         />
         <video
           ref={videoBRef}
           muted
           playsInline
           className="absolute inset-0 w-full h-full object-cover object-top"
-          style={{ filter: 'brightness(1.05) contrast(1.02)' }}
+          style={{
+            objectFit: 'cover',
+            objectPosition: 'top',
+            filter: 'brightness(1.05) contrast(1.02)',
+          }}
         />
       </div>
     );
@@ -582,8 +592,9 @@ export function AnimatedJesus({ isSpeaking = false, emotion = 'neutral' }: Anima
         ref={canvasRef}
         width={500}
         height={600}
-        className="w-full h-full"
-        style={{ imageRendering: 'auto' }}
+        className="w-full h-full object-cover"
+        // The fixed-size fallback used to stretch to every hero aspect ratio.
+        style={{ objectFit: 'cover', imageRendering: 'auto' }}
       />
     </div>
   );

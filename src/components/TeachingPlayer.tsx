@@ -25,12 +25,22 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
   // Audit fix: track in-flight fetch so closing the modal cancels it instead
   // of letting the response resolve into a setState on an unmounted modal.
   const abortRef = useRef<AbortController | null>(null);
+  // Whether the speech playing was started by this panel's Listen button, so
+  // closing the panel stops the teaching but never someone else's speech.
+  const startedHereRef = useRef(false);
+  const isSpeakingRef = useRef(isSpeaking);
+  const onStopSpeakingRef = useRef(onStopSpeaking);
+  useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
+  useEffect(() => { onStopSpeakingRef.current = onStopSpeaking; }, [onStopSpeaking]);
 
-  // Abort any in-flight generation when the modal closes.
+  // Abort any in-flight generation when the modal closes, and stop the
+  // teaching being read: once closed there is no control left to stop it.
   useEffect(() => {
     if (!isOpen) {
       abortRef.current?.abort();
       abortRef.current = null;
+      if (startedHereRef.current && isSpeakingRef.current) onStopSpeakingRef.current();
+      startedHereRef.current = false;
     }
   }, [isOpen]);
 
@@ -43,6 +53,9 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
   }, []);
 
   async function generateTeaching(topic: string) {
+    // The previous teaching shouldn't keep playing over the new one.
+    if (startedHereRef.current && isSpeaking) onStopSpeaking();
+    startedHereRef.current = false;
     // Cancel a prior in-flight request (rapid topic switching).
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -143,7 +156,15 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
 
               <button
                 type="button"
-                onClick={() => isSpeaking ? onStopSpeaking() : onSpeak(teaching)}
+                onClick={() => {
+                  if (isSpeaking) {
+                    startedHereRef.current = false;
+                    onStopSpeaking();
+                  } else {
+                    startedHereRef.current = true;
+                    onSpeak(teaching);
+                  }
+                }}
                 aria-pressed={isSpeaking}
                 aria-label={isSpeaking ? 'Stop listening' : 'Listen to teaching'}
                 className={`mt-4 w-full flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-semibold

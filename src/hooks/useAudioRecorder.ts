@@ -25,6 +25,9 @@ export interface UseAudioRecorderOptions {
 
 export type RecorderState = 'idle' | 'requesting' | 'recording' | 'stopping';
 
+/** 3 MB of audio is 4 MB as base64 — under Vercel's 4.5 MB request-body limit for /api/memo. */
+const MAX_RECORDING_BYTES = 3_000_000;
+
 export interface UseAudioRecorderResult {
   state: RecorderState;
   /** 0..1 — RMS amplitude updated ~30x per second while recording. */
@@ -152,7 +155,11 @@ export function useAudioRecorder({
 
     let recorder: MediaRecorder;
     try {
-      recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      // 32 kbps is plenty for speech and keeps a 5-minute memo (~1.2 MB)
+      // well under Vercel's 4.5 MB request-body limit once base64-encoded.
+      const options: MediaRecorderOptions = { audioBitsPerSecond: 32_000 };
+      if (mimeType) options.mimeType = mimeType;
+      recorder = new MediaRecorder(stream, options);
     } catch (err) {
       stream.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -169,13 +176,21 @@ export function useAudioRecorder({
     // onstop fires after a new start() reset the refs" bugs.
     const myChunks: Blob[] = [];
     const myMimeType = mimeType || 'audio/webm';
+    let myBytes = 0;
     recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) myChunks.push(e.data);
+      if (e.data && e.data.size > 0) {
+        myChunks.push(e.data);
+        myBytes += e.data.size;
+        // Some browsers ignore audioBitsPerSecond. Stop before the upload
+        // would exceed the server's body limit, so the memo is kept instead
+        // of being rejected after the fact.
+        if (myBytes >= MAX_RECORDING_BYTES && recorder.state === 'recording') recorder.stop();
+      }
     };
     recorder.onstop = () => {
       const myGen = generationRef.current;
       const blob = new Blob(myChunks, { type: myMimeType });
-      const duration = Math.max(0, (Date.now() - startTimeRef.current) / 1000);
+      const duration = Math.round(Math.max(0, (Date.now() - startTimeRef.current) / 1000));
       const wasCancelled = cancelledRef.current;
       tearDown();
       setState('idle');
@@ -243,7 +258,8 @@ export function useAudioRecorder({
       }
     }, Math.min(maxDurationSec, 600) * 1000);
 
-    recorder.start();
+    // 1 s timeslice so ondataavailable can track the size while recording.
+    recorder.start(1000);
     setState('recording');
   }, [state, isSupported, maxDurationSec, tearDown]);
 

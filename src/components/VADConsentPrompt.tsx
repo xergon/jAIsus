@@ -43,11 +43,14 @@ interface VADConsentPromptProps {
   isOpen: boolean;
   onAccept: () => void;
   onDecline: () => void;
+  /** Backdrop or Escape: close without saving a choice. Defaults to onDecline. */
+  onDismiss?: () => void;
 }
 
-export function VADConsentPrompt({ isOpen, onAccept, onDecline }: VADConsentPromptProps) {
+export function VADConsentPrompt({ isOpen, onAccept, onDecline, onDismiss }: VADConsentPromptProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  useModalA11y({ isOpen, onClose: onDecline, ref: dialogRef });
+  const dismiss = onDismiss ?? onDecline;
+  useModalA11y({ isOpen, onClose: dismiss, ref: dialogRef });
 
   if (!isOpen) return null;
 
@@ -55,7 +58,7 @@ export function VADConsentPrompt({ isOpen, onAccept, onDecline }: VADConsentProm
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
       <div
         className="absolute inset-0 bg-black/40"
-        onClick={onDecline}
+        onClick={dismiss}
         aria-hidden="true"
       />
       <div

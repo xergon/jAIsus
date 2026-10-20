@@ -95,18 +95,21 @@ export function ExportButton({ className }: ExportButtonProps): JSX.Element {
 
   // Escape closes — listened at document level since the menu may steal focus
   // from arbitrary descendants. Closing returns focus to the trigger so
-  // keyboard users don't lose their place.
+  // keyboard users don't lose their place. Capture phase + preventDefault so
+  // the Settings sheet's own Escape handler (useModalA11y, bubble phase on
+  // document) doesn't also close the whole sheet.
   useEffect(() => {
     if (!isOpen) return;
     const handleKey = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.preventDefault();
         event.stopPropagation();
         close();
         triggerRef.current?.focus();
       }
     };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
+    document.addEventListener('keydown', handleKey, true);
+    return () => document.removeEventListener('keydown', handleKey, true);
   }, [isOpen, close]);
 
   // When the menu opens, focus the first option.

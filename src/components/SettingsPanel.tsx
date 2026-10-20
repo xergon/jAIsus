@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { VOICE_OPTIONS, DEFAULT_VOICE_ID } from '@/lib/constants';
-import { setStoredVoiceId } from '@/hooks/useSpeechSynthesis';
-import { PERSONALITIES } from '@/lib/personalities';
+import { setStoredVoiceId, setVoiceOverride } from '@/hooks/useSpeechSynthesis';
+import { PERSONALITIES, getPersonality } from '@/lib/personalities';
+import { listCustomPersonalities, CUSTOM_CHANGED_EVENT, type CustomPersonality } from '@/lib/custom-personalities';
 import { useModalA11y } from '@/hooks/useModalA11y';
 import { toast } from '@/lib/toast';
 import { ExportButton } from './ExportButton';
@@ -26,6 +27,16 @@ export function getStoredVisionInterval(): number {
   } catch { return DEFAULT_VISION_INTERVAL; }
 }
 
+// The voice in use, or the default when none is stored or the stored one is
+// no longer offered (the server falls back to the default the same way).
+function readStoredVoiceId(): string {
+  try {
+    const saved = localStorage.getItem('jaisus-voice-id');
+    if (saved && VOICE_OPTIONS.some(v => v.id === saved)) return saved;
+  } catch { /* storage unavailable */ }
+  return DEFAULT_VOICE_ID;
+}
+
 interface SettingsPanelProps {
   isOpen: boolean;
   onClose: () => void;
@@ -38,6 +49,10 @@ interface SettingsPanelProps {
   cameraActive: boolean;
   personalityId: string;
   onPersonalityChange: (id: string) => void;
+  /** Voice barge-in (VAD): talking while jAIsus speaks interrupts him. */
+  vadEnabled: boolean;
+  onToggleVad: () => void;
+  onOpenCreator?: () => void;
 }
 
 export function SettingsPanel({
@@ -52,6 +67,9 @@ export function SettingsPanel({
   cameraActive,
   personalityId,
   onPersonalityChange,
+  vadEnabled,
+  onToggleVad,
+  onOpenCreator,
 }: SettingsPanelProps) {
   const [cleared, setCleared] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState(DEFAULT_VOICE_ID);
@@ -69,19 +87,44 @@ export function SettingsPanel({
     };
   }, []);
 
-  // Load saved voice on mount
+  // Show the voice in use each time the sheet opens. Reading it only on mount
+  // showed a stale voice: ChatInterface sets the personality's voice after
+  // this panel mounts, and switching personality changes it again. Adjusted
+  // during render (React's "store info from previous renders" pattern).
+  const voiceSyncKey = isOpen ? personalityId : null;
+  const [syncedVoiceKey, setSyncedVoiceKey] = useState<string | null>(null);
+  if (voiceSyncKey !== syncedVoiceKey) {
+    setSyncedVoiceKey(voiceSyncKey);
+    if (voiceSyncKey !== null) setSelectedVoice(readStoredVoiceId());
+  }
+
+  // User-made personalities, read each time the sheet opens and kept in sync
+  // while it is open (the creator, or another tab, can change them).
+  const [customList, setCustomList] = useState<CustomPersonality[]>([]);
+  const [listedOpen, setListedOpen] = useState(false);
+  if (isOpen !== listedOpen) {
+    setListedOpen(isOpen);
+    if (isOpen) setCustomList(listCustomPersonalities());
+  }
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('jaisus-voice-id');
-        if (saved) setSelectedVoice(saved);
-      } catch { /* */ }
-    }
-  }, []);
+    if (!isOpen) return;
+    const refresh = () => setCustomList(listCustomPersonalities());
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'jaisus-custom-personalities' || e.key === null) refresh();
+    };
+    window.addEventListener(CUSTOM_CHANGED_EVENT, refresh);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(CUSTOM_CHANGED_EVENT, refresh);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [isOpen]);
 
   function handleVoiceChange(voiceId: string) {
     setSelectedVoice(voiceId);
     setStoredVoiceId(voiceId);
+    // Kept for this personality across reloads; its own voice needs no override.
+    setVoiceOverride(personalityId, voiceId === getPersonality(personalityId).voiceId ? null : voiceId);
     const voice = VOICE_OPTIONS.find(v => v.id === voiceId);
     if (voice) toast.info(`Voice set to ${voice.name}`);
   }
@@ -114,7 +157,7 @@ export function SettingsPanel({
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
-        className="relative w-full max-w-md bg-white rounded-t-2xl shadow-2xl p-5 animate-slide-up"
+        className="relative w-full max-w-md max-h-[90vh] [@supports(height:1dvh)]:max-h-[90dvh] overflow-y-auto overscroll-contain modal-scroll bg-white rounded-t-2xl shadow-2xl p-5 animate-slide-up"
       >
         <div className="flex justify-center mb-3">
           <div className="w-10 h-1 rounded-full bg-stone-300" aria-hidden="true" />
@@ -127,10 +170,11 @@ export function SettingsPanel({
           <div>
             <p className="text-sm font-medium text-stone-800 mb-2">Personality</p>
             <div className="grid grid-cols-2 gap-2">
-              {PERSONALITIES.map(p => (
+              {[...PERSONALITIES, ...customList].map(p => (
                 <button
                   key={p.id}
                   type="button"
+                  aria-pressed={personalityId === p.id}
                   onClick={() => {
                     onPersonalityChange(p.id);
                     // Only toast on an actual change, not when re-tapping the current selection.
@@ -151,18 +195,32 @@ export function SettingsPanel({
                   </div>
                 </button>
               ))}
+              {onOpenCreator && (
+                <button
+                  type="button"
+                  onClick={onOpenCreator}
+                  className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-left bg-white border-2 border-dashed border-stone-300 transition-all active:scale-[0.98]"
+                >
+                  <span className="text-lg text-stone-500 w-6 text-center" aria-hidden="true">+</span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-stone-800 truncate">Create your own</p>
+                    <p className="text-[10px] text-stone-500 truncate">Design a new personality</p>
+                  </div>
+                </button>
+              )}
             </div>
           </div>
 
           {/* Auto-speak toggle */}
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-stone-800">Auto-speak responses</p>
+              <p id="settings-autospeak-label" className="text-sm font-medium text-stone-800">Auto-speak responses</p>
               <p className="text-xs text-stone-500">Read AI responses aloud automatically</p>
             </div>
             <button
               type="button"
               aria-pressed={autoSpeak}
+              aria-labelledby="settings-autospeak-label"
               onClick={onToggleAutoSpeak}
               className={`relative w-12 h-7 rounded-full transition-colors ${
                 autoSpeak ? 'bg-teal-500' : 'bg-stone-300'
@@ -171,6 +229,33 @@ export function SettingsPanel({
               <span
                 className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-transform ${
                   autoSpeak ? 'translate-x-5' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Voice barge-in toggle */}
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p id="settings-vad-label" className="text-sm font-medium text-stone-800">Listen for interruptions</p>
+              <p className="text-xs text-stone-500">
+                {autoSpeak
+                  ? 'Start talking while jAIsus speaks to stop him and be heard'
+                  : 'Works when Auto-speak is on'}
+              </p>
+            </div>
+            <button
+              type="button"
+              aria-pressed={vadEnabled}
+              aria-labelledby="settings-vad-label"
+              onClick={onToggleVad}
+              className={`relative shrink-0 w-12 h-7 rounded-full transition-colors ${
+                vadEnabled ? 'bg-teal-500' : 'bg-stone-300'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-transform ${
+                  vadEnabled ? 'translate-x-5' : 'translate-x-0.5'
                 }`}
               />
             </button>

@@ -1,4 +1,4 @@
-import { DEFAULT_VOICE_ID, VOICE_OPTIONS, ELEVENLABS_MODEL_ID, TTS_SETTINGS } from '@/lib/constants';
+import { DEFAULT_VOICE_ID, VOICE_OPTIONS, VOICE_MODELS, ELEVENLABS_MODEL_ID, TTS_SETTINGS } from '@/lib/constants';
 import { clientKey, rateLimit, rateLimitResponse } from '@/lib/rate-limit';
 
 export const maxDuration = 30;
@@ -46,6 +46,10 @@ export async function POST(req: Request) {
       ? body.voiceId
       : DEFAULT_VOICE_ID;
 
+  // Most voices run on the fast flash model; a few only sound right on another.
+  const { modelId, settings } =
+    VOICE_MODELS[selectedVoice] ?? { modelId: ELEVENLABS_MODEL_ID, settings: TTS_SETTINGS };
+
   // Audit fix: wire req.signal so closing the client mid-stream cancels the
   // upstream ElevenLabs request — they bill per character even after disconnect.
   let response: Response;
@@ -60,8 +64,8 @@ export async function POST(req: Request) {
         },
         body: JSON.stringify({
           text,
-          model_id: ELEVENLABS_MODEL_ID,
-          voice_settings: TTS_SETTINGS,
+          model_id: modelId,
+          voice_settings: settings,
         }),
         signal: req.signal,
       }

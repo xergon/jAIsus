@@ -16,7 +16,7 @@
 // after a deploy, 404'ing on chunk fetches. Bump this whenever the SW or the
 // cached HTML / app-shell strategy changes — keep in sync with SW_VERSION in
 // src/lib/sw-config.ts so the in-app version check still triggers a reload.
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const CACHE_NAME = 'jaisus-' + CACHE_VERSION;
 const MAX_CACHE_ENTRIES = 50;
 const NAV_NETWORK_TIMEOUT_MS = 3000;
@@ -24,15 +24,17 @@ const NAV_NETWORK_TIMEOUT_MS = 3000;
 // Small app shell — precached on install so the first offline visit has something to show.
 // Audit fix: `/` was previously precached, which let an offline PWA serve a STALE
 // HTML body across builds (with old hashed-asset references that 404 on the next
-// load). The navigation handler is network-first with a fast timeout and falls
-// back to the inline OFFLINE_HTML below, so we don't need to precache the root.
+// load). The navigation handler is network-first and falls back to the inline
+// OFFLINE_HTML below, so we don't need to precache the root.
+// Videos are not precached: media is never served by this worker (see the fetch
+// handler) and the files already have a long-lived HTTP cache.
 const APP_SHELL = [
   '/manifest.json',
-  '/jaisus-embraces.mp4',
-  '/jaisus-prays.mp4',
 ];
 
-// Inline offline fallback page — single self-contained HTML string, no JS, on-brand.
+// Inline offline fallback page — single self-contained HTML string, on-brand.
+// It retries by itself (when the connection comes back, and every 15 s), and has
+// a button, because an installed PWA has no reload control.
 const OFFLINE_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -71,6 +73,19 @@ const OFFLINE_HTML = `<!DOCTYPE html>
     opacity: 0.88;
   }
   .small { font-size: 0.875rem; opacity: 0.55; margin-top: 1.75rem; }
+  button {
+    margin-top: 1.25rem;
+    min-height: 44px;
+    padding: 0.625rem 1.5rem;
+    font: inherit;
+    font-size: 1rem;
+    color: #140a04;
+    background: #f8d99a;
+    border: 0;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  button:active { transform: scale(0.97); }
   .dot {
     display: inline-block;
     width: 0.5rem; height: 0.5rem;
@@ -87,8 +102,13 @@ const OFFLINE_HTML = `<!DOCTYPE html>
     <h1>j<b>AI</b>sus</h1>
     <p>You're offline — but I'm still here in spirit.</p>
     <p>Reconnect to talk.</p>
+    <button type="button" onclick="location.reload()">Try again</button>
     <p class="small"><span class="dot"></span>Waiting for a signal</p>
   </main>
+  <script>
+    addEventListener('online', function () { location.reload(); });
+    setTimeout(function () { location.reload(); }, 15000);
+  </script>
 </body>
 </html>`;
 
@@ -139,15 +159,24 @@ function offlineResponse() {
   });
 }
 
-// Network-first with timeout, falling back to cache, falling back to offline HTML.
+// Network-first. The timeout only applies when there is a cached copy to fall
+// back to: HTML is served no-store and never cached, so without a cached copy a
+// slow (but working) network must be awaited, not replaced by the offline page.
 async function networkFirstNavigation(request) {
   const cache = await caches.open(CACHE_NAME);
+  const networkPromise = fetch(request);
+  networkPromise.catch(() => undefined); // avoid an unhandled rejection if we stop waiting on it
+  const cached = await cache.match(request);
   try {
-    const networkPromise = fetch(request);
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('nav-timeout')), NAV_NETWORK_TIMEOUT_MS);
-    });
-    const response = await Promise.race([networkPromise, timeoutPromise]);
+    let response;
+    if (cached) {
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('nav-timeout')), NAV_NETWORK_TIMEOUT_MS);
+      });
+      response = await Promise.race([networkPromise, timeoutPromise]);
+    } else {
+      response = await networkPromise;
+    }
     // Only cache successful, basic (same-origin) responses — AND respect
     // the response's Cache-Control header. Audit fix: previously we'd cache
     // the response unconditionally, which silently undid the `no-store`
@@ -156,12 +185,13 @@ async function networkFirstNavigation(request) {
       const cc = (response.headers.get('Cache-Control') || '').toLowerCase();
       const uncacheable = /no-store|no-cache|private/.test(cc);
       if (!uncacheable) {
-        cache.put(request, response.clone()).then(() => trimCache(CACHE_NAME, MAX_CACHE_ENTRIES));
+        cache.put(request, response.clone())
+          .then(() => trimCache(CACHE_NAME, MAX_CACHE_ENTRIES))
+          .catch(() => undefined);
       }
     }
     return response;
   } catch {
-    const cached = await cache.match(request);
     if (cached) return cached;
     // Last resort: inline offline page. `/` is no longer precached so we
     // skip the cache.match('/') fallback that used to live here.
@@ -176,8 +206,11 @@ async function cacheFirstStatic(request) {
 
   const networkFetch = fetch(request)
     .then((response) => {
-      if (response && response.ok && response.type === 'basic') {
-        cache.put(request, response.clone()).then(() => trimCache(CACHE_NAME, MAX_CACHE_ENTRIES));
+      // 200 only: Cache.put rejects partial (206) responses.
+      if (response && response.status === 200 && response.type === 'basic') {
+        cache.put(request, response.clone())
+          .then(() => trimCache(CACHE_NAME, MAX_CACHE_ENTRIES))
+          .catch(() => undefined);
       }
       return response;
     })
@@ -204,6 +237,15 @@ self.addEventListener('fetch', (event) => {
   // /api/* — pass straight through. NEVER cache AI/TTS/vision/version responses.
   if (url.pathname.startsWith('/api/')) return;
 
+  // Media — leave to the browser. Video/audio elements send Range requests and
+  // Safari needs 206 Partial Content answers; a cached full 200 breaks playback.
+  if (
+    request.headers.has('range') ||
+    request.destination === 'video' ||
+    request.destination === 'audio' ||
+    /\.(mp4|webm|mov|mp3|m4a|wav|ogg)$/i.test(url.pathname)
+  ) return;
+
   // Navigation requests (HTML documents) — network-first with offline fallback
   const isNavigation =
     request.mode === 'navigate' ||
@@ -214,7 +256,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Everything else (static assets: JS, CSS, fonts, images, videos) — cache-first
+  // Everything else (static assets: JS, CSS, fonts, images) — cache-first
   event.respondWith(cacheFirstStatic(request));
 });
 

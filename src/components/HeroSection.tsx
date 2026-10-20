@@ -10,6 +10,30 @@ interface HeroSectionProps {
   emotion?: Emotion;
 }
 
+// Perf audit fix: compute starfield positions ONCE at module load instead
+// of allocating 20 new position objects on every re-render. During chat
+// streaming HeroSection re-renders on every token; without this it was
+// allocating + reformatting 20 style strings 60× per second.
+const STARFIELD = Array.from({ length: 20 }, (_, i) => ({
+  key: i,
+  width: `${1 + (i % 3)}px`,
+  height: `${1 + (i % 3)}px`,
+  left: `${(i * 37 + 13) % 100}%`,
+  top: `${(i * 23 + 7) % 100}%`,
+  animationDelay: `${i * 0.15}s`,
+  animationDuration: `${2 + (i % 4)}s`,
+  opacity: 0.15 + (i % 5) * 0.08,
+}));
+
+const TRANSCRIPT_TAIL_CHARS = 160;
+
+/** The last ~160 characters, starting at a word. */
+function transcriptTail(text: string): string {
+  if (text.length <= TRANSCRIPT_TAIL_CHARS) return text;
+  const tail = text.slice(-TRANSCRIPT_TAIL_CHARS);
+  return '…' + tail.replace(/^\S*\s+/, '');
+}
+
 /**
  * Hero section — Jesus dominates the top, fades into WHITE content area below.
  * Extended +60px with softer gradient blend.
@@ -32,7 +56,9 @@ export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSect
       // user wasn't expecting on a "voice-first" hero screen. Drop the
       // hero to 70vh on small viewports and let it grow back to 80vh on
       // taller screens via min-height. The maxHeight cap still applies.
-      className="relative w-full overflow-hidden h-[70vh] [@supports(height:1svh)]:h-[70svh] sm:h-[80vh] sm:[@supports(height:1svh)]:h-[80svh]"
+      // `isolate` keeps the z-layers below inside the hero, so the sticky
+      // bottom bar paints (and takes clicks) on top where the two overlap.
+      className="relative isolate w-full overflow-hidden h-[70vh] [@supports(height:1svh)]:h-[70svh] sm:h-[80vh] sm:[@supports(height:1svh)]:h-[80svh]"
       style={{ maxHeight: '900px', minHeight: '380px' }}
     >
       {/* ===== BACKGROUND: Jesus video/image fills hero ===== */}
@@ -61,20 +87,20 @@ export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSect
       {/* ===== OVERLAY UI ===== */}
       <div className="relative z-10 flex flex-col items-center w-full h-full">
 
-        {/* Starfield — top area */}
+        {/* Starfield — top area (positions memoized at module scope) */}
         <div className="absolute inset-x-0 top-0 h-36 overflow-hidden pointer-events-none">
-          {Array.from({ length: 20 }).map((_, i) => (
+          {STARFIELD.map(s => (
             <div
-              key={i}
+              key={s.key}
               className="absolute rounded-full bg-white animate-pulse"
               style={{
-                width: `${1 + (i % 3)}px`,
-                height: `${1 + (i % 3)}px`,
-                left: `${(i * 37 + 13) % 100}%`,
-                top: `${(i * 23 + 7) % 100}%`,
-                animationDelay: `${i * 0.15}s`,
-                animationDuration: `${2 + (i % 4)}s`,
-                opacity: 0.15 + (i % 5) * 0.08,
+                width: s.width,
+                height: s.height,
+                left: s.left,
+                top: s.top,
+                animationDelay: s.animationDelay,
+                animationDuration: s.animationDuration,
+                opacity: s.opacity,
               }}
             />
           ))}
@@ -172,11 +198,12 @@ export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSect
         {/* Spacer — Jesus body/heart visible */}
         <div className="flex-1" />
 
-        {/* Interim transcript */}
+        {/* Interim transcript: only the newest words, so a long dictation
+            doesn't push them out of the hero, which clips its overflow. */}
         {voiceState === 'listening' && interimTranscript && (
           <div className="mb-6 max-w-xs animate-fade-in">
-            <p className="text-sm text-blue-100 italic text-center bg-black/30 backdrop-blur-sm rounded-xl px-4 py-2 border border-blue-300/20">
-              &ldquo;{interimTranscript}&rdquo;
+            <p className="text-sm text-blue-100 italic text-center bg-black/30 backdrop-blur-sm rounded-xl px-4 py-2 border border-blue-300/20 [overflow-wrap:anywhere]">
+              &ldquo;{transcriptTail(interimTranscript)}&rdquo;
             </p>
           </div>
         )}

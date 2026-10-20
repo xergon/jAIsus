@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useModalA11y } from '@/hooks/useModalA11y';
+import { useKeyboardInset } from '@/hooks/useKeyboardInset';
 import { toast } from '@/lib/toast';
 import { track } from '@/lib/analytics';
 import { VOICE_OPTIONS, DEFAULT_VOICE_ID } from '@/lib/constants';
@@ -21,6 +22,17 @@ interface PersonalityCreatorProps {
   /** Called when the user deletes a personality, so the parent can clear
    *  any stale active state pointing at it. */
   onDeleted?: (deletedId: string) => void;
+}
+
+const MIN_PROMPT_LENGTH = 40;
+
+/** True when the focused control was reached by keyboard (Tab / Enter). */
+function focusIsFromKeyboard(): boolean {
+  try {
+    return document.activeElement?.matches(':focus-visible') ?? false;
+  } catch {
+    return false; // :focus-visible unsupported
+  }
 }
 
 const SUGGESTED_EMOJIS = ['✨', '🦋', '🌊', '🔥', '🌙', '🌿', '⚓', '🪐', '🎭', '🐉', '🦊', '🪨', '☄️', '🍀', '🕊️', '🌺'];
@@ -56,7 +68,6 @@ const STARTER_TEMPLATES = [
 
 export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: PersonalityCreatorProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  useModalA11y({ isOpen, onClose, ref: dialogRef });
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -70,11 +81,55 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
   // Audit fix: two-tap delete confirm — first tap arms, second commits.
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const deleteConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Two-tap guard for the backdrop / Escape while the form has unsaved edits.
+  const [confirmingClose, setConfirmingClose] = useState(false);
+  const closeConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     return () => {
       if (deleteConfirmTimerRef.current) clearTimeout(deleteConfirmTimerRef.current);
+      if (closeConfirmTimerRef.current) clearTimeout(closeConfirmTimerRef.current);
     };
   }, []);
+
+  // Switching between the list and the form unmounts the focused button.
+  // When that switch came from the keyboard, move focus into the new view.
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const focusNewViewRef = useRef(false);
+  useEffect(() => {
+    if (!focusNewViewRef.current) return;
+    focusNewViewRef.current = false;
+    (showList ? newButtonRef.current : nameInputRef.current)?.focus();
+  }, [showList]);
+
+  // The form is "dirty" when it differs from what it started as: blank for a
+  // new personality, the saved values when editing.
+  const original = editingId ? list.find((p) => p.id === editingId) : undefined;
+  const isDirty =
+    !showList &&
+    (name !== (original?.name ?? '') ||
+      desc !== (original?.desc ?? '') ||
+      emoji !== (original?.emoji ?? '✨') ||
+      voiceId !== (original?.voiceId ?? DEFAULT_VOICE_ID) ||
+      systemPrompt !== (original?.systemPrompt ?? ''));
+
+  // Backdrop taps and Escape come through here. Closing resets the form, so
+  // ask for a second close first when there are unsaved edits.
+  const requestClose = () => {
+    if (isDirty && !confirmingClose) {
+      setConfirmingClose(true);
+      toast.info("Your changes aren't saved. Close again to discard them.", { duration: 3000 });
+      if (closeConfirmTimerRef.current) clearTimeout(closeConfirmTimerRef.current);
+      closeConfirmTimerRef.current = setTimeout(() => {
+        setConfirmingClose(false);
+        closeConfirmTimerRef.current = null;
+      }, 3000);
+      return;
+    }
+    onClose();
+  };
+  useModalA11y({ isOpen, onClose: requestClose, ref: dialogRef });
+  const keyboard = useKeyboardInset(isOpen);
 
   // Hydrate list on open + subscribe to cross-tab changes.
   // Audit fix: filter the `storage` event by key so unrelated localStorage
@@ -106,10 +161,16 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
       setSystemPrompt('');
       setShowList(true);
       setSubmitting(false);
+      setConfirmingClose(false);
+      if (closeConfirmTimerRef.current) {
+        clearTimeout(closeConfirmTimerRef.current);
+        closeConfirmTimerRef.current = null;
+      }
     }
   }, [isOpen]);
 
   function startNew() {
+    focusNewViewRef.current = focusIsFromKeyboard();
     setEditingId(null);
     setName('');
     setDesc('');
@@ -120,6 +181,7 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
   }
 
   function startEdit(p: CustomPersonality) {
+    focusNewViewRef.current = focusIsFromKeyboard();
     setEditingId(p.id);
     setName(p.name);
     setDesc(p.desc);
@@ -139,8 +201,14 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
     setVoiceId(DEFAULT_VOICE_ID);
   }
 
+  function handleCancelEdit() {
+    focusNewViewRef.current = focusIsFromKeyboard();
+    setShowList(true);
+  }
+
   function handleSave() {
     if (submitting) return;
+    const fromKeyboard = focusIsFromKeyboard();
     setSubmitting(true);
     const result = saveCustomPersonality({
       id: editingId ?? undefined,
@@ -159,6 +227,7 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
     track(editingId ? 'personality.edited' : 'personality.created');
     onSaved?.(result.personality);
     setSubmitting(false);
+    focusNewViewRef.current = fromKeyboard;
     setShowList(true);
     setList(listCustomPersonalities());
   }
@@ -197,15 +266,18 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
 
   if (!isOpen) return null;
 
+  const promptLength = systemPrompt.trim().length;
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+      <div className="absolute inset-0 bg-black/40" onClick={requestClose} aria-hidden="true" />
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="personality-creator-title"
         className="relative w-full max-w-md max-h-[90vh] bg-white rounded-t-2xl shadow-2xl flex flex-col animate-slide-up"
+        style={keyboard.maxHeight ? { marginBottom: keyboard.inset, maxHeight: keyboard.maxHeight } : undefined}
       >
         <div className="flex justify-center pt-3 pb-2">
           <div className="w-10 h-1 rounded-full bg-stone-300" aria-hidden="true" />
@@ -217,6 +289,8 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
           </h2>
           {showList && (
             <button
+              ref={newButtonRef}
+              type="button"
               onClick={startNew}
               className="rounded-lg bg-amber-500 text-white px-3 py-1.5 text-sm font-medium active:scale-[0.98] transition-transform"
               aria-label="Create new personality"
@@ -333,6 +407,7 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
                     Name <span className="text-stone-400">({name.length}/{LIMITS.maxNameLength})</span>
                   </label>
                   <input
+                    ref={nameInputRef}
                     id="custom-name"
                     type="text"
                     value={name}
@@ -376,7 +451,10 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
               {/* System prompt */}
               <div>
                 <label htmlFor="custom-prompt" className="block text-xs font-medium text-stone-700 mb-1">
-                  System prompt <span className="text-stone-400">({systemPrompt.length}/{LIMITS.maxPromptLength})</span>
+                  System prompt{' '}
+                  <span className="text-stone-400">
+                    ({systemPrompt.length}/{LIMITS.maxPromptLength}, min {MIN_PROMPT_LENGTH})
+                  </span>
                 </label>
                 <textarea
                   id="custom-prompt"
@@ -387,6 +465,11 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
                   placeholder="You ARE jAIsus — but tonight you speak as..."
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-teal-400"
                 />
+                {promptLength > 0 && promptLength < MIN_PROMPT_LENGTH && (
+                  <p className="text-[11px] text-amber-700 mt-1">
+                    Add {MIN_PROMPT_LENGTH - promptLength} more characters so jAIsus has something to work with.
+                  </p>
+                )}
                 <p className="text-[11px] text-stone-500 mt-1">
                   Tell jAIsus how to speak. Include the vibe, the tone, what to do, what to avoid. Stage directions
                   (like *smiles*) are stripped automatically — write spoken words only.
@@ -396,7 +479,7 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
               <div className="flex gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowList(true)}
+                  onClick={handleCancelEdit}
                   className="flex-1 rounded-xl border border-stone-200 py-2.5 text-sm font-medium text-stone-600 active:scale-[0.98] transition-transform"
                 >
                   Cancel
@@ -404,7 +487,7 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
                 <button
                   type="button"
                   onClick={handleSave}
-                  disabled={submitting || !name.trim() || systemPrompt.trim().length < 40}
+                  disabled={submitting || !name.trim() || promptLength < MIN_PROMPT_LENGTH}
                   className="flex-1 rounded-xl bg-teal-500 py-2.5 text-sm font-semibold text-white disabled:opacity-50 active:scale-[0.98] transition-transform"
                 >
                   {editingId ? 'Save changes' : 'Create'}

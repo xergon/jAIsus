@@ -81,6 +81,12 @@ function readMessageTimestamp(msg: UIMessage): number | undefined {
   return undefined;
 }
 
+/** Same rule ChatInterface uses to hide auto-vision pings, e.g. "(observe what you see…)". */
+function isInternalPrompt(text: string): boolean {
+  const t = text.trim();
+  return t.startsWith('(') && t.endsWith(')');
+}
+
 /**
  * Read + index chat history from localStorage. Returns [] on any error.
  * Joins all text parts, strips emotion tags from assistant text.
@@ -114,6 +120,9 @@ function readChatItems(): ChatItem[] {
     }
     if (textParts.length === 0) continue;
     const joined = textParts.join(' ');
+    // Auto-vision pings are sent as user messages wrapped in parentheses and
+    // hidden from the chat UI; don't surface them as things the user said.
+    if (msg.role === 'user' && isInternalPrompt(joined)) continue;
     const cleaned =
       msg.role === 'assistant'
         ? stripAllEmotionTags(joined).cleanText

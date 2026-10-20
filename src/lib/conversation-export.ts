@@ -99,6 +99,12 @@ function extractText(msg: UIMessageLike): string {
   return out.join('');
 }
 
+/** Same rule ChatInterface uses to hide auto-vision pings, e.g. "(observe what you see…)". */
+function isInternalPrompt(text: string): boolean {
+  const t = text.trim();
+  return t.startsWith('(') && t.endsWith(')');
+}
+
 /**
  * Read & parse JSON from localStorage. Returns `null` on any failure —
  * missing key, malformed JSON, storage disabled, SSR, etc. Callers fall
@@ -161,6 +167,9 @@ export function buildExport(): ExportPayload {
       const role = msg.role as 'user' | 'assistant';
 
       const rawText = extractText(msg);
+      // Auto-vision pings are user messages wrapped in parentheses that the
+      // chat UI hides; they aren't something the user said.
+      if (role === 'user' && isInternalPrompt(rawText)) continue;
       // Strip emotion tags from assistant responses before exporting. User
       // messages never contain them, but stripping is idempotent so we
       // could run it unconditionally — keeping the conditional makes the
@@ -447,15 +456,16 @@ export function downloadExport(options: ExportOptions): boolean {
     anchor.click();
     document.body.removeChild(anchor);
 
-    // Revoke on the next microtask so the click handler has time to start
-    // the download before we drop the underlying blob.
+    // Keep the blob URL alive for a while: iOS Safari only reads it after
+    // the user confirms its download prompt, so revoking right away makes
+    // the download fail there. 40 s matches FileSaver.js.
     setTimeout(() => {
       try {
         URL.revokeObjectURL(url);
       } catch {
         // Ignore — already revoked or never created.
       }
-    }, 0);
+    }, 40_000);
 
     return true;
   } catch {

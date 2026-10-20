@@ -100,7 +100,10 @@ export async function POST(req: Request) {
         // short sentences; without a cap, a model glitch or adversarial
         // frame could produce thousands of tokens of billed output. 120
         // tokens is generous for two sentences.
-        generationConfig: { maxOutputTokens: 120 },
+        // gemini-2.5-flash thinks by default and its thinking tokens count
+        // against maxOutputTokens, which left captions empty or cut off.
+        // A 1-2 sentence caption needs no thinking.
+        generationConfig: { maxOutputTokens: 120, thinkingConfig: { thinkingBudget: 0 } },
       }),
       signal: req.signal,
     });
@@ -113,7 +116,12 @@ export async function POST(req: Request) {
     }
 
     const data = await response.json();
-    const description = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const parts: Array<{ text?: unknown; thought?: unknown }> = data?.candidates?.[0]?.content?.parts ?? [];
+    const description = parts
+      .filter((p) => !p.thought && typeof p.text === 'string')
+      .map((p) => p.text as string)
+      .join('')
+      .trim();
     // Audit follow-up: when Gemini blocks for SAFETY (promptFeedback.blockReason),
     // we used to silently return empty — surface a hint so the UI can react.
     if (!description && data?.promptFeedback?.blockReason) {

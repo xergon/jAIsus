@@ -25,7 +25,9 @@ export const maxDuration = 30;
 const MEMO_LIMIT = { capacity: 6, refillRatePerSec: 1 / 100 };
 
 // Hard caps mirror src/lib/voice-memos.ts MEMO_LIMITS.
-const MAX_AUDIO_BASE64_LENGTH = 7_500_000; // ~5.6 MB binary = ~5 min webm/opus 64 kbps
+// Vercel rejects request bodies over 4.5 MB before this route runs. The
+// recorder stops at 3 MB of audio (4 MB as base64) and records at 32 kbps.
+const MAX_AUDIO_BASE64_LENGTH = 4_200_000;
 const MAX_TRANSCRIPT_LENGTH = 5000;
 const MAX_RESPONSE_LENGTH = 3000;
 const MAX_SUMMARY_LENGTH = 240;

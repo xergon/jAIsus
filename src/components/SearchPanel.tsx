@@ -9,13 +9,15 @@ import {
   type JSX,
 } from 'react';
 import { useModalA11y } from '@/hooks/useModalA11y';
+import { useKeyboardInset } from '@/hooks/useKeyboardInset';
 import { searchAll, type SearchResult, type SearchSource } from '@/lib/search';
 import { EmptyState } from '@/components/EmptyState';
 
 interface SearchPanelProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Called when the user picks a chat result to ask jAIsus about it again. */
+  /** Called when the user picks a result: chat and saved results send their
+   *  text again, parable results ask about the parable. */
   onAskAbout?: (content: string) => void;
 }
 
@@ -88,6 +90,7 @@ export function SearchPanel({
 }: SearchPanelProps): JSX.Element | null {
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalA11y({ isOpen, onClose, ref: dialogRef });
+  const keyboard = useKeyboardInset(isOpen);
 
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -169,13 +172,11 @@ export function SearchPanel({
   );
 
   const handleSelect = (result: SearchResult) => {
-    if (result.source === 'chat' && onAskAbout) {
-      // Send the FULL original message text, not the truncated excerpt.
-      // `result.text` is the display-only excerpt with ellipses; using it
-      // for the prompt would feed jAIsus "…clipped middle…" instead of the
-      // actual content the user wants to ask about.
-      onAskAbout(result.fullText);
-    }
+    // Send the FULL text, not the truncated excerpt. `result.text` is the
+    // display-only excerpt with ellipses; using it for the prompt would feed
+    // jAIsus "…clipped middle…". For parables, fullText is already a
+    // "Tell me more about …" prompt (see search.ts).
+    onAskAbout?.(result.fullText);
     onClose();
   };
 
@@ -212,13 +213,14 @@ export function SearchPanel({
         role="dialog"
         aria-modal="true"
         aria-labelledby="search-title"
-        className={`absolute bottom-0 left-0 right-0 max-h-[85vh] bg-white rounded-t-2xl shadow-2xl
+        className={`absolute bottom-0 left-0 right-0 max-h-[85vh] flex flex-col bg-white rounded-t-2xl shadow-2xl
           transition-transform duration-300 ease-out ${
             isOpen ? 'translate-y-0' : 'translate-y-full'
           }`}
+        style={keyboard.maxHeight ? { bottom: keyboard.inset, maxHeight: keyboard.maxHeight } : undefined}
       >
         {/* Drag handle */}
-        <div className="flex justify-center pt-3 pb-2">
+        <div className="shrink-0 flex justify-center pt-3 pb-2">
           <div
             className="w-10 h-1 rounded-full bg-stone-300"
             aria-hidden="true"
@@ -226,7 +228,7 @@ export function SearchPanel({
         </div>
 
         {/* Header */}
-        <div className="px-4 pb-3">
+        <div className="shrink-0 px-4 pb-3">
           <h2 id="search-title" className="text-lg font-bold text-stone-800">
             Search
           </h2>
@@ -295,7 +297,7 @@ export function SearchPanel({
 
         {/* Results / tips / empty state */}
         <div
-          className="overflow-y-auto px-4 pb-6 max-h-[65vh] modal-scroll"
+          className="min-h-0 overflow-y-auto px-4 pb-6 max-h-[65vh] modal-scroll"
           role="region"
           aria-live="polite"
           aria-busy={isDebouncing}
@@ -352,8 +354,7 @@ export function SearchPanel({
           ) : (
             <ul className="pt-2" role="list">
               {results.map(result => {
-                const isChat = result.source === 'chat';
-                const isInteractive = isChat && !!onAskAbout;
+                const isInteractive = !!onAskAbout;
                 return (
                   <li key={result.id} className="mb-2">
                     <button
@@ -361,7 +362,7 @@ export function SearchPanel({
                       onClick={() => handleSelect(result)}
                       aria-label={
                         isInteractive
-                          ? `Ask jAIsus about this chat result: ${result.text}`
+                          ? `Ask jAIsus about this ${SOURCE_LABEL[result.source]} result: ${result.text}`
                           : `${SOURCE_LABEL[result.source]} result: ${result.text}`
                       }
                       className="w-full bg-stone-50 rounded-xl border border-stone-200 p-3 text-left active:scale-[0.99] hover:bg-stone-100 transition-all"

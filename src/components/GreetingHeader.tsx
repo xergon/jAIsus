@@ -1,28 +1,49 @@
 'use client';
 
 import type { JSX } from 'react';
-import { useEffect, useState } from 'react';
-import { getGreeting, TIME_EMOJI, type Greeting } from '@/lib/greeting';
+import { useMemo, useSyncExternalStore } from 'react';
+import { bucketForHour, getGreeting, TIME_EMOJI } from '@/lib/greeting';
 
 interface GreetingHeaderProps {
   className?: string;
 }
 
+function subscribeToClock(onChange: () => void): () => void {
+  const onVisibility = () => {
+    if (document.visibilityState === 'visible') onChange();
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  const id = setInterval(onChange, 60_000);
+  return () => {
+    document.removeEventListener('visibilitychange', onVisibility);
+    clearInterval(id);
+  };
+}
+
+/** Changes only when the greeting can change: a new day or time-of-day bucket. */
+function getClockSlot(): string {
+  const now = new Date();
+  return `${now.toDateString()}|${bucketForHour(now.getHours())}`;
+}
+
+function getServerClockSlot(): null {
+  return null;
+}
+
 /**
  * Warm, time-aware greeting for the empty state of the chat.
  *
- * Renders nothing until the component has mounted on the client — the
- * underlying `getGreeting` uses local time, so SSR (UTC) and CSR (local)
- * can disagree. Guarding behind `useEffect` avoids a hydration mismatch.
+ * Renders nothing on the server and during hydration — the underlying
+ * `getGreeting` uses local time, so SSR (UTC) and CSR (local) can disagree.
+ *
+ * The greeting follows the clock while the app stays open (re-read on return
+ * to the foreground and once a minute).
  */
 export function GreetingHeader({
   className,
 }: GreetingHeaderProps): JSX.Element | null {
-  const [greeting, setGreeting] = useState<Greeting | null>(null);
-
-  useEffect(() => {
-    setGreeting(getGreeting());
-  }, []);
+  const slot = useSyncExternalStore(subscribeToClock, getClockSlot, getServerClockSlot);
+  const greeting = useMemo(() => (slot ? getGreeting() : null), [slot]);
 
   if (!greeting) return null;
 

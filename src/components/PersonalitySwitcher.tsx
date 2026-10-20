@@ -199,7 +199,12 @@ export function PersonalitySwitcher({
             <span aria-hidden="true" className="text-base leading-none">
               {p.emoji}
             </span>
-            <span className="hidden sm:inline">{p.name}</span>
+            {/* UX audit fix: previously the name was hidden under the `sm:`
+                breakpoint, so on phones users saw ONLY the emoji and had to
+                tap each chip to discover what it was — but tapping also
+                *switched* the personality mid-conversation. Always show the
+                name; text-[11px] keeps the chip strip compact. */}
+            <span className="text-[11px] leading-none whitespace-nowrap">{p.name}</span>
           </button>
         );
       })}

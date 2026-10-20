@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useConversationMemory } from '@/hooks/useConversationMemory';
 import { useModalA11y } from '@/hooks/useModalA11y';
 import { getPersonality } from '@/lib/personalities';
+import { getCustomPersonality, isCustomId } from '@/lib/custom-personalities';
 import { EmptyState } from '@/components/EmptyState';
 
 interface MemoriesPanelProps {
@@ -168,7 +169,12 @@ export function MemoriesPanel({ isOpen, onClose }: MemoriesPanelProps) {
           ) : (
             <ul className="pt-2" role="list">
               {memories.map(mem => {
-                const personality = getPersonality(mem.personalityId);
+                // getPersonality() falls back to Mushroom Guru for unknown ids,
+                // which mislabels memories from a since-deleted custom personality.
+                const personality =
+                  isCustomId(mem.personalityId) && !getCustomPersonality(mem.personalityId)
+                    ? { emoji: '✨', name: 'Custom (deleted)' }
+                    : getPersonality(mem.personalityId);
                 return (
                   <li
                     key={mem.id}

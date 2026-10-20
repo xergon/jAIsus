@@ -33,6 +33,9 @@ export function VoiceButton({ voiceState, onStart, onStop, isSupported }: VoiceB
 
   return (
     <button
+      // Not a submit button: it sits inside the text form, where Enter would
+      // otherwise "click" it and turn the mic on.
+      type="button"
       onClick={handleClick}
       disabled={!isSupported}
       className={`${baseClasses} ${stateClasses} ${disabledClasses}`}

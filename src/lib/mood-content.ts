@@ -228,12 +228,22 @@ function pickParable(themes: string[]): {
   return null;
 }
 
-function pickPrompt(categories: string[]): string | null {
-  const set = new Set(categories);
-  for (const p of ALL_SUGGESTED_PROMPTS) {
-    if (set.has(p.category)) return p.text;
-  }
-  return null;
+// Starter prompt per mood, picked by id: the first prompt in a mapped
+// category was "What does it mean to love my neighbor?" for 7 of 10 moods.
+// Moods without a fitting prompt get null, and the chat sends
+// "I'm feeling <mood>." instead.
+const MOOD_PROMPT_IDS: Partial<Record<Mood, string>> = {
+  anxious: 'f-anxious',
+  angry: 'f-angry',
+  lonely: 'f-alone',
+  overwhelmed: 'f-overwhelmed',
+  doubting: 'x-not-believing',
+  lost: 'r-purpose',
+};
+
+function pickPrompt(mood: Mood): string | null {
+  const id = MOOD_PROMPT_IDS[mood];
+  return id ? ALL_SUGGESTED_PROMPTS.find((p) => p.id === id)?.text ?? null : null;
 }
 
 /**
@@ -242,8 +252,8 @@ function pickPrompt(categories: string[]): string | null {
  * Each slot picks the first match against the mood's mapped
  * themes/categories. Slots that don't find a match fall back to the
  * first item of the relevant pool so verse/kindness are never null
- * when data is present. Parable and prompt may be `null` only if their
- * pools are empty (defensive — shouldn't happen with the bundled data).
+ * when data is present. Parable may be `null` only if its pool is empty.
+ * Prompt is `null` for moods with no fitting starter (see MOOD_PROMPT_IDS).
  */
 export function getMoodContent(mood: Mood): MoodContent {
   const info = getMoodInfo(mood);
@@ -262,8 +272,7 @@ export function getMoodContent(mood: Mood): MoodContent {
     pickKindness(info.kindnessCategories) ?? ALL_KINDNESS_ACTS[0] ?? null;
   const parable = pickParable(info.parableThemes) ??
     (parables[0] ? { id: parables[0].id, title: parables[0].title } : null);
-  const promptText =
-    pickPrompt(info.promptCategories) ?? ALL_SUGGESTED_PROMPTS[0]?.text ?? null;
+  const promptText = pickPrompt(mood);
 
   return {
     verse,

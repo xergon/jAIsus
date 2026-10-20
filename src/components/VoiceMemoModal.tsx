@@ -56,13 +56,15 @@ function blobToBase64(blob: Blob): Promise<string> {
 
 export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpeaking, onOpenSaved }: VoiceMemoModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  useModalA11y({ isOpen, onClose, ref: dialogRef });
   const { vibrate } = useHaptics();
 
   const [screen, setScreen] = useState<ScreenState>({ kind: 'idle' });
   // Confirm-then-execute for Cancel when >30s of audio is at stake.
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const cancelConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Same two-tap guard for the backdrop / Escape while a memo is at stake.
+  const [confirmingClose, setConfirmingClose] = useState(false);
+  const closeConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // After ~6s of processing we swap reassurance copy; after ~20s, swap again.
   // This lives in state so the render reflects the message change.
   const [processingHint, setProcessingHint] = useState<0 | 1 | 2>(0);
@@ -132,6 +134,36 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
   const recorderRef = useRef(recorder);
   useEffect(() => { recorderRef.current = recorder; }, [recorder]);
 
+  // Backdrop taps and Escape come through here. Closing cancels the recording,
+  // aborts processing and drops an unsaved reflection, so ask for a second
+  // close first when that would lose something.
+  const requestClose = () => {
+    const atStake =
+      screen.kind === 'processing' ||
+      screen.kind === 'result' ||
+      (screen.kind === 'recording' && recorder.elapsedSec >= 30);
+    if (atStake && !confirmingClose) {
+      vibrate('warning');
+      setConfirmingClose(true);
+      toast.info(
+        screen.kind === 'result'
+          ? "This reflection isn't saved. Close again to discard it."
+          : screen.kind === 'processing'
+            ? 'jAIsus is still reflecting. Close again to discard this memo.'
+            : 'Still recording. Close again to discard it.',
+        { duration: 3000 }
+      );
+      if (closeConfirmTimerRef.current) clearTimeout(closeConfirmTimerRef.current);
+      closeConfirmTimerRef.current = setTimeout(() => {
+        setConfirmingClose(false);
+        closeConfirmTimerRef.current = null;
+      }, 3000);
+      return;
+    }
+    onClose();
+  };
+  useModalA11y({ isOpen, onClose: requestClose, ref: dialogRef });
+
   // Sync the modal's `screen` from the hook's `recorder.state` for the
   // transient 'requesting'/'recording' window. If the user dismisses the
   // mic permission prompt, the hook returns to 'idle' and we want the modal
@@ -157,10 +189,15 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
     if (isSpeakingRef.current) onStopSpeakingRef.current();
     setScreen({ kind: 'idle' });
     setConfirmingCancel(false);
+    setConfirmingClose(false);
     setProcessingHint(0);
     if (cancelConfirmTimerRef.current) {
       clearTimeout(cancelConfirmTimerRef.current);
       cancelConfirmTimerRef.current = null;
+    }
+    if (closeConfirmTimerRef.current) {
+      clearTimeout(closeConfirmTimerRef.current);
+      closeConfirmTimerRef.current = null;
     }
   }, [isOpen]);
 
@@ -206,10 +243,11 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
     }
   }, [isOpen]);
 
-  // Cleanup pending cancel-confirm timer on unmount.
+  // Cleanup pending confirm timers on unmount.
   useEffect(() => {
     return () => {
       if (cancelConfirmTimerRef.current) clearTimeout(cancelConfirmTimerRef.current);
+      if (closeConfirmTimerRef.current) clearTimeout(closeConfirmTimerRef.current);
     };
   }, []);
 
@@ -299,7 +337,7 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+      <div className="absolute inset-0 bg-black/40" onClick={requestClose} aria-hidden="true" />
       <div
         ref={dialogRef}
         role="dialog"

@@ -4,6 +4,7 @@ import { useState, useRef } from 'react';
 import { parables } from '@/lib/parables';
 import type { Parable } from '@/lib/types';
 import { useModalA11y } from '@/hooks/useModalA11y';
+import { useKeyboardInset } from '@/hooks/useKeyboardInset';
 import { EmptyState } from '@/components/EmptyState';
 import { ParableReader } from '@/components/ParableReader';
 
@@ -18,6 +19,7 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
   const [readingParable, setReadingParable] = useState<Parable | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalA11y({ isOpen, onClose, ref: dialogRef });
+  const keyboard = useKeyboardInset(isOpen);
 
   const filtered = parables.filter(p =>
     p.title.toLowerCase().includes(search.toLowerCase()) ||
@@ -51,17 +53,18 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
         role="dialog"
         aria-modal="true"
         aria-labelledby="parables-title"
-        className={`absolute bottom-0 left-0 right-0 max-h-[80vh] bg-white rounded-t-2xl shadow-2xl
+        className={`absolute bottom-0 left-0 right-0 max-h-[80vh] flex flex-col bg-white rounded-t-2xl shadow-2xl
           transition-transform duration-300 ease-out ${
           isOpen ? 'translate-y-0' : 'translate-y-full'
         }`}
+        style={keyboard.maxHeight ? { bottom: keyboard.inset, maxHeight: keyboard.maxHeight } : undefined}
       >
         {/* Handle */}
-        <div className="flex justify-center pt-3 pb-2">
+        <div className="shrink-0 flex justify-center pt-3 pb-2">
           <div className="w-10 h-1 rounded-full bg-stone-300" aria-hidden="true" />
         </div>
 
-        <div className="px-4 pb-2">
+        <div className="shrink-0 px-4 pb-2">
           <h2 id="parables-title" className="text-lg font-bold text-stone-800">Explore Parables</h2>
           <label htmlFor="parables-search" className="sr-only">Search parables</label>
           <input
@@ -74,7 +77,7 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
           />
         </div>
 
-        <div className="overflow-y-auto px-4 pb-6 max-h-[60vh] modal-scroll">
+        <div className="min-h-0 overflow-y-auto px-4 pb-6 max-h-[60vh] modal-scroll">
           {filtered.length === 0 && search !== '' && (
             <EmptyState
               icon="🔍"

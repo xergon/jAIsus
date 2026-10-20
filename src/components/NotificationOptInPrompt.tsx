@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useModalA11y } from '@/hooks/useModalA11y';
 import { usePushSubscription } from '@/hooks/usePushSubscription';
+import { toast } from '@/lib/toast';
 
 /**
  * One-time consent prompt for daily-verse push notifications.
@@ -40,6 +41,18 @@ export function markNotificationPromptSeen(): void {
   }
 }
 
+/** Why turning on daily verses failed, or null when the user closed the browser's dialog. */
+function subscribeFailureMessage(error?: string): string | null {
+  if (error === 'Permission default') return null;
+  if (error === 'Permission denied') {
+    return 'Notifications are blocked for this site. You can allow them in your browser settings.';
+  }
+  if (error?.startsWith('Push not supported')) {
+    return "This browser can't receive daily verses. On iPhone, add jAIsus to your Home Screen first.";
+  }
+  return "Couldn't turn on daily verses right now.";
+}
+
 interface NotificationOptInPromptProps {
   isOpen: boolean;
   /** Called after the user accepts AND the subscription succeeds. */
@@ -55,6 +68,8 @@ export function NotificationOptInPrompt({
 }: NotificationOptInPromptProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const { subscribe } = usePushSubscription();
+  // Waiting for the browser's permission dialog and the subscription.
+  const [busy, setBusy] = useState(false);
   // Audit fix: track mount so handleAccept's awaited subscribe() can't fire
   // callbacks on a stale parent (e.g. modal closed while the browser's
   // permission prompt is still pending).
@@ -81,15 +96,21 @@ export function NotificationOptInPrompt({
   };
 
   const handleAccept = async () => {
+    if (busy) return;
+    setBusy(true);
     markNotificationPromptSeen();
     const result = await subscribe();
     if (!mountedRef.current) return;
+    setBusy(false);
     if (result.ok) {
       onAccepted?.();
     } else {
       // Permission denied / unsupported / network — close anyway. We
       // already marked seen so we won't re-prompt; user can re-enable from
-      // Settings later (a future addition).
+      // Settings later (a future addition). Say why, unless the user just
+      // closed the browser's own permission dialog.
+      const reason = subscribeFailureMessage(result.error);
+      if (reason) toast.error(reason);
       onDeclined();
     }
   };
@@ -145,10 +166,12 @@ export function NotificationOptInPrompt({
           <button
             type="button"
             onClick={handleAccept}
+            disabled={busy}
+            aria-busy={busy}
             className="flex-1 rounded-xl bg-teal-600 py-2.5 text-sm font-semibold text-white shadow-sm
-              hover:bg-teal-700 active:scale-[0.98] transition-transform"
+              hover:bg-teal-700 active:scale-[0.98] transition-transform disabled:opacity-60"
           >
-            Yes, daily verse
+            {busy ? 'Turning on…' : 'Yes, daily verse'}
           </button>
         </div>
       </div>

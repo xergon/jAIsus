@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { toast } from '@/lib/toast';
+import { VOICE_OPTIONS } from '@/lib/constants';
 
 interface SpeechSynthesisResult {
   speak: (text: string) => Promise<void>;
@@ -18,6 +20,35 @@ function getStoredVoiceId(): string | null {
 export function setStoredVoiceId(id: string) {
   if (typeof window === 'undefined') return;
   try { localStorage.setItem('jaisus-voice-id', id); } catch { /* */ }
+}
+
+// Voices picked in Settings, per personality. 'jaisus-voice-id' is rewritten
+// from the personality on every load and switch, so the choice is kept here.
+const VOICE_OVERRIDES_KEY = 'jaisus-voice-overrides';
+
+function readVoiceOverrides(): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(VOICE_OVERRIDES_KEY) ?? '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch { return {}; }
+}
+
+/** The voice picked in Settings for this personality, if it is still offered. */
+export function getVoiceOverride(personalityId: string): string | null {
+  if (typeof window === 'undefined') return null;
+  const id = readVoiceOverrides()[personalityId];
+  return typeof id === 'string' && VOICE_OPTIONS.some(v => v.id === id) ? id : null;
+}
+
+/** null removes the override, so the personality's own voice applies again. */
+export function setVoiceOverride(personalityId: string, voiceId: string | null) {
+  if (typeof window === 'undefined') return;
+  try {
+    const overrides = readVoiceOverrides();
+    if (voiceId) overrides[personalityId] = voiceId;
+    else delete overrides[personalityId];
+    localStorage.setItem(VOICE_OVERRIDES_KEY, JSON.stringify(overrides));
+  } catch { /* */ }
 }
 
 /**
@@ -52,9 +83,19 @@ function getWarmAudio(): HTMLAudioElement {
   return warmAudio;
 }
 
+const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+// touchstart is not a user-activation event (touchend and click are), so iOS
+// can refuse a play() started from it.
+const UNLOCK_EVENTS = ['touchend', 'click', 'keydown'];
+
+function markAudioUnlocked() {
+  audioUnlocked = true;
+  UNLOCK_EVENTS.forEach(e => document.removeEventListener(e, unlockAudio, true));
+}
+
+// Retried on every gesture until the warm element has actually played once.
 function unlockAudio() {
   if (audioUnlocked) return;
-  audioUnlocked = true;
 
   // Resume the persistent AudioContext
   try {
@@ -73,49 +114,80 @@ function unlockAudio() {
   // Do NOT clear audio.src afterwards — keeps the autoplay privilege alive.
   try {
     const audio = getWarmAudio();
-    audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+    // Already playing speech: it is unlocked, and loading the silent clip
+    // would cut the speech off.
+    if (!audio.paused) {
+      markAudioUnlocked();
+      return;
+    }
+    audio.src = SILENT_WAV;
     audio.volume = 0.01;
     audio.play().then(() => {
-      audio.pause();
+      // Speech may have taken the element over in the meantime.
+      if (audio.src === SILENT_WAV) audio.pause();
       audio.volume = 1.0;
+      markAudioUnlocked();
       console.log('Audio element unlocked successfully');
-    }).catch(() => {});
+    }).catch(() => {
+      audio.volume = 1.0;
+    });
   } catch {
     // Ignore
   }
 }
 
 // Set up unlock listeners once per browser session (NOT once per module load).
-//
-// Using { once: true } means each listener auto-removes after firing.
-// The extra `window.__jaisusAudioUnlockBound` guard prevents HMR / module
-// re-evaluation from re-attaching duplicate listeners before the user's
-// first interaction fires them. Combined with the `audioUnlocked` guard
-// inside unlockAudio(), this is safe even if multiple events fire (e.g.,
-// a click triggers both touchstart and click).
+// The `window.__jaisusAudioUnlockBound` guard prevents HMR / module
+// re-evaluation from re-attaching duplicate listeners. They are removed once
+// an unlock succeeds.
 if (typeof window !== 'undefined') {
   const w = window as unknown as { __jaisusAudioUnlockBound?: boolean };
   if (!w.__jaisusAudioUnlockBound) {
     w.__jaisusAudioUnlockBound = true;
-    const unlockEvents = ['touchstart', 'touchend', 'click', 'keydown'];
-    unlockEvents.forEach(e =>
-      document.addEventListener(e, unlockAudio, { capture: true, once: true, passive: true })
+    UNLOCK_EVENTS.forEach(e =>
+      document.addEventListener(e, unlockAudio, { capture: true, passive: true })
     );
   }
+}
+
+// The hook instance currently playing through warmAudio (ChatInterface's or
+// ParableReader's). A new player stops the old one, so two instances never
+// fight over the shared element.
+let warmAudioOwner: { id: object; stop: () => void } | null = null;
+
+// Shown once per page load, so an ElevenLabs outage doesn't toast every reply.
+let premiumVoiceDownNotified = false;
+function notifyPremiumVoiceDown() {
+  if (premiumVoiceDownNotified) return;
+  premiumVoiceDownNotified = true;
+  toast.info("The premium voice isn't available right now, so your device's voice is reading instead.");
+}
+
+/** How a clip ended: played through, couldn't play, gave up waiting, or stop() was called. */
+type PlayResult = 'ended' | 'failed' | 'timeout' | 'stopped';
+
+interface SpeechChunk {
+  text: string;
+  /** Started once the chunk is next in line, so it downloads while the one before it plays. */
+  audio: Promise<Blob | null> | null;
+  /** If this chunk's audio fails, the browser voice reads this text instead. */
+  fallbackText?: string;
 }
 
 export function useSpeechSynthesis(): SpeechSynthesisResult {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Shared by every TTS fetch until the next stop(), so stop() cancels both the
+  // chunk playing and the one being prefetched.
   const abortRef = useRef<AbortController | null>(null);
-  const queueRef = useRef<string[]>([]);
+  const queueRef = useRef<SpeechChunk[]>([]);
   const queueActiveRef = useRef(false);
   const streamDoneRef = useRef(false);
   // Audit fix: playback generation counter so a stop() during an in-flight
-  // playOneSentence can short-circuit the pending promise immediately rather
+  // playBlob can short-circuit the pending promise immediately rather
   // than waiting for the 30s safety timeout. Every stop() bumps it.
   const playbackGenRef = useRef(0);
-  // Refs to currently-pending playOneSentence resolvers so stop() can
+  // Refs to currently-pending playBlob resolvers so stop() can
   // force-resolve them. Multiple may be queued (queueActiveRef serializes
   // but the audio.onended callback can race with stop()).
   const pendingResolversRef = useRef<Set<() => void>>(new Set());
@@ -151,26 +223,24 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
   }, []);
 
   const stop = useCallback(() => {
-    // Bump playback generation FIRST so any in-flight playOneSentence
+    // Bump playback generation FIRST so any in-flight playBlob
     // detects the cancellation on its next checkpoint.
     playbackGenRef.current++;
     abortRef.current?.abort();
+    abortRef.current = null;
     // Clear the sentence queue
     queueRef.current = [];
     streamDoneRef.current = true;
     queueActiveRef.current = false;
-    // Audit fix: reset the dedup marker too. Previously stop() left
-    // lastQueuedRef pointing at the most-recent sentence, which silently
-    // muted the first matching sentence of the next stream (the chat
-    // interface's "Yes." → "Yes." case from the race-condition audit).
-    lastQueuedRef.current = '';
+    const ownedAudio = warmAudioOwner?.id === playbackGenRef;
+    if (ownedAudio) warmAudioOwner = null;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
       // Do NOT clear src — preserves warm audio's autoplay privilege
       audioRef.current = null;
     }
-    // Force-resolve every pending playOneSentence promise so processQueue
+    // Force-resolve every pending playBlob promise so processQueue
     // exits the await immediately instead of waiting for the 30s safety
     // timeout (audit fix).
     const pending = Array.from(pendingResolversRef.current);
@@ -183,8 +253,8 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       try { URL.revokeObjectURL(url); } catch { /* */ }
     });
     activeBlobUrlsRef.current.clear();
-    // Also stop browser TTS
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
+    // Also stop browser TTS, unless another instance is the one speaking
+    if ((ownedAudio || !warmAudioOwner) && typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
     setIsSpeaking(false);
@@ -196,194 +266,114 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
     return () => { stop(); };
   }, [stop]);
 
-  const speak = useCallback(async (text: string) => {
-    stop();
+  // --- Chunk queue ---
+  // Streamed replies arrive sentence by sentence (queueSentence) and longer
+  // texts are split into chunks (speak); both play here one chunk at a time.
+  // Much lower latency than waiting for the full response.
 
-    // Ensure audio is unlocked
-    unlockAudio();
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    setIsSpeaking(true);
-
+  // Fetches one chunk of speech; null when ElevenLabs fails or returns nothing.
+  const fetchAudio = useCallback(async (text: string): Promise<Blob | null> => {
+    const controller = abortRef.current ?? (abortRef.current = new AbortController());
     try {
       const response = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: text.slice(0, 2000), voiceId: getStoredVoiceId() }), // Limit text length
+        body: JSON.stringify({ text, voiceId: getStoredVoiceId() }),
         signal: controller.signal,
       });
-
       if (!response.ok) {
-        console.warn('TTS API returned', response.status, '— falling back to browser TTS');
-        speakWithBrowser(text, () => setIsSpeaking(false));
-        return;
+        console.warn('TTS API returned', response.status);
+        return null;
       }
-
       const blob = await response.blob();
-      if (blob.size < 100) {
-        console.warn('TTS response too small, falling back to browser');
-        speakWithBrowser(text, () => setIsSpeaking(false));
+      return blob.size < 100 ? null : blob;
+    } catch {
+      return null; // aborted by stop(), or network error
+    }
+  }, []);
+
+  // Starts downloading the next chunk in line while the current one plays.
+  // eleven_v3 voices take 2-3 s per sentence; without this lookahead each
+  // sentence would wait for the previous one to finish playing.
+  const prefetchNext = useCallback(() => {
+    const next = queueRef.current[0];
+    if (next && !next.audio) next.audio = fetchAudio(next.text);
+  }, [fetchAudio]);
+
+  const playBlob = useCallback((blob: Blob, myGen: number): Promise<PlayResult> => {
+    const blobUrl = URL.createObjectURL(blob);
+    trackBlobUrl(blobUrl);
+    return new Promise<PlayResult>((resolve) => {
+      let resolved = false;
+      let safetyTimeout: ReturnType<typeof setTimeout> | undefined;
+      // Register a force-stop hook so stop() can short-circuit this promise
+      // synchronously rather than waiting on the 30s safety timeout.
+      const forceStop = () => done('stopped');
+      pendingResolversRef.current.add(forceStop);
+      const done = (result: PlayResult) => {
+        if (resolved) return;
+        resolved = true;
+        pendingResolversRef.current.delete(forceStop);
+        clearTimeout(safetyTimeout);
+        // Delay blob revocation so stale events don't fire errors on the audio element
+        setTimeout(() => releaseBlobUrl(blobUrl), 500);
+        audioRef.current = null;
+        resolve(result);
+      };
+
+      // If stop() already fired during the awaits above, resolve immediately.
+      if (myGen !== playbackGenRef.current) {
+        done('stopped');
         return;
       }
 
-      const blobUrl = URL.createObjectURL(blob);
-      trackBlobUrl(blobUrl);
+      // Safety: if the clip never ends, give up on it. A clip paused from
+      // outside the page (lock screen, a phone call) never fires 'ended', so
+      // pause it here, or it could be resumed on top of what plays next and
+      // stop() couldn't reach it. A long clip still playing gets more time.
+      let lastTime = -1;
+      const checkStalled = () => {
+        const el = audioRef.current;
+        if (el && !el.paused && el.currentTime > lastTime) {
+          lastTime = el.currentTime;
+          safetyTimeout = setTimeout(checkStalled, 30000);
+          return;
+        }
+        try { el?.pause(); } catch { /* */ }
+        done('timeout');
+      };
+      safetyTimeout = setTimeout(checkStalled, 30000);
 
-      // Use the warm (gesture-unlocked) audio element. It was play()-ed during
-      // a user gesture so Chrome trusts it for autoplay. getWarmAudio() always
-      // returns an element (creates one lazily), so no || fallback needed.
       const audio = getWarmAudio();
+      // Null out old handlers FIRST — prevents stale events from a previous
+      // blob URL from resolving this promise prematurely.
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
       audio.src = blobUrl;
       audio.volume = 1.0;
       audioRef.current = audio;
 
-      audio.onended = () => {
-        releaseBlobUrl(blobUrl);
-        setIsSpeaking(false);
-        audioRef.current = null;
-      };
+      // Set handlers AFTER src is assigned so only events from this clip resolve
+      audio.onended = () => done('ended');
+      audio.onerror = () => done('failed');
 
-      audio.onerror = (e) => {
-        console.warn('Audio playback error:', e);
-        releaseBlobUrl(blobUrl);
-        setIsSpeaking(false);
-        audioRef.current = null;
-        speakWithBrowser(text, () => setIsSpeaking(false));
-      };
-
-      // Resume AudioContext in case it got suspended
+      // Resume AudioContext
       try {
         const ctx = getAudioContext();
-        if (ctx.state === 'suspended') {
-          await ctx.resume();
-        }
-      } catch {
-        // non-critical
-      }
+        if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      } catch { /* */ }
 
-      try {
-        await audio.play();
-        console.log('ElevenLabs TTS playing, size:', blob.size);
-      } catch (playErr) {
-        console.warn('play() blocked, trying with new Audio:', playErr);
-        // Fallback: create a fresh Audio element (sometimes works after context resume)
-        const fallback = new Audio(blobUrl);
-        fallback.volume = 1.0;
-        audioRef.current = fallback;
-        fallback.onended = () => {
-          releaseBlobUrl(blobUrl);
-          setIsSpeaking(false);
-          audioRef.current = null;
-        };
-        fallback.onerror = () => {
-          releaseBlobUrl(blobUrl);
-          setIsSpeaking(false);
-          audioRef.current = null;
-          speakWithBrowser(text, () => setIsSpeaking(false));
-        };
-        try {
-          await fallback.play();
-        } catch {
-          console.warn('All audio play attempts failed, falling back to browser TTS');
-          releaseBlobUrl(blobUrl);
-          speakWithBrowser(text, () => setIsSpeaking(false));
-        }
-      }
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') return;
-      console.warn('TTS error, falling back to browser:', err);
-      speakWithBrowser(text, () => setIsSpeaking(false));
-    }
-  }, [stop, trackBlobUrl, releaseBlobUrl]);
-
-  // --- Sentence queue for streaming TTS ---
-  // Plays sentences one by one as they arrive from the AI stream.
-  // Much lower latency than waiting for the full response.
-
-  const playOneSentence = useCallback(async (sentence: string): Promise<boolean> => {
-    unlockAudio();
-    // Snapshot the playback generation at entry — if stop() bumps it during
-    // any await, we bail before the next audio.play().
-    const myGen = playbackGenRef.current;
-    try {
-      const controller = new AbortController();
-      abortRef.current = controller;
-      const response = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: sentence, voiceId: getStoredVoiceId() }),
-        signal: controller.signal,
+      audio.play().catch(() => {
+        // Try fallback with a fresh element
+        const fb = new Audio(blobUrl);
+        fb.volume = 1.0;
+        audioRef.current = fb;
+        fb.onended = () => done('ended');
+        fb.onerror = () => done('failed');
+        fb.play().catch(() => done('failed'));
       });
-      if (myGen !== playbackGenRef.current) return false;
-      if (!response.ok) return false;
-      const blob = await response.blob();
-      if (myGen !== playbackGenRef.current) return false;
-      if (blob.size < 100) return false;
-
-      const blobUrl = URL.createObjectURL(blob);
-      trackBlobUrl(blobUrl);
-      return new Promise<boolean>((resolve) => {
-        let resolved = false;
-        // Register a force-stop hook so stop() can short-circuit this promise
-        // synchronously rather than waiting on the 30s safety timeout.
-        const forceStop = () => done(false);
-        pendingResolversRef.current.add(forceStop);
-        const done = (ok: boolean) => {
-          if (resolved) return;
-          resolved = true;
-          pendingResolversRef.current.delete(forceStop);
-          clearTimeout(safetyTimeout);
-          // Delay blob revocation so stale events don't fire errors on the audio element
-          setTimeout(() => releaseBlobUrl(blobUrl), 500);
-          audioRef.current = null;
-          resolve(ok);
-        };
-
-        // If stop() already fired during the awaits above, resolve immediately.
-        if (myGen !== playbackGenRef.current) {
-          done(false);
-          return;
-        }
-
-        // Safety: if audio never fires onended/onerror, resolve after 30s
-        const safetyTimeout = setTimeout(() => done(false), 30000);
-
-        const audio = getWarmAudio();
-        // Null out old handlers FIRST — prevents stale events from a previous
-        // blob URL from resolving this promise prematurely.
-        audio.onended = null;
-        audio.onerror = null;
-        audio.pause();
-        audio.src = blobUrl;
-        audio.volume = 1.0;
-        audioRef.current = audio;
-
-        // Set handlers AFTER src is assigned so only events from this clip resolve
-        audio.onended = () => done(true);
-        audio.onerror = () => done(false);
-
-        // Resume AudioContext
-        try {
-          const ctx = getAudioContext();
-          if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-        } catch { /* */ }
-
-        audio.play().catch(() => {
-          // Try fallback with a fresh element
-          const fb = new Audio(blobUrl);
-          fb.volume = 1.0;
-          audioRef.current = fb;
-          fb.onended = () => done(true);
-          fb.onerror = () => done(false);
-          fb.play().catch(() => done(false));
-        });
-      });
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') return false;
-      return false;
-    }
+    });
   }, [trackBlobUrl, releaseBlobUrl]);
 
   const processQueue = useCallback(async () => {
@@ -391,24 +381,62 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       console.log('processQueue: already active, skipping');
       return;
     }
+    if (warmAudioOwner && warmAudioOwner.id !== playbackGenRef) warmAudioOwner.stop();
+    warmAudioOwner = { id: playbackGenRef, stop };
     queueActiveRef.current = true;
     setIsSpeaking(true);
     console.log('processQueue: started');
     // Snapshot generation so stop() bumps it and we exit on next loop iteration.
     const myGen = playbackGenRef.current;
+    const cancelled = () => myGen !== playbackGenRef.current;
+    // Reads text with the browser voice; stop() ends it like any other chunk.
+    const speakBrowser = (text: string) => new Promise<void>((resolve) => {
+      const finish = () => {
+        pendingResolversRef.current.delete(finish);
+        resolve();
+      };
+      pendingResolversRef.current.add(finish);
+      speakWithBrowser(text, finish, cancelled);
+    });
+    // Once ElevenLabs fails, the rest of this run uses the browser voice
+    // rather than switching voices sentence by sentence.
+    let premiumDown = false;
 
     try {
       while (true) {
         // Audit: bail immediately if stop() was called.
-        if (myGen !== playbackGenRef.current) {
+        if (cancelled()) {
           console.log('processQueue: stop() bumped generation, exiting');
           break;
         }
         if (queueRef.current.length > 0) {
-          const sentence = queueRef.current.shift()!;
-          console.log('processQueue: playing sentence:', sentence.slice(0, 50));
-          const ok = await playOneSentence(sentence);
-          console.log('processQueue: sentence done, ok:', ok);
+          const chunk = queueRef.current.shift()!;
+          console.log('processQueue: playing sentence:', chunk.text.slice(0, 50));
+          let result: PlayResult = 'failed';
+          if (!premiumDown) {
+            const audio = chunk.audio ?? fetchAudio(chunk.text);
+            prefetchNext();
+            const blob = await audio;
+            if (cancelled()) break;
+            if (blob) {
+              result = await playBlob(blob, myGen);
+            } else {
+              premiumDown = true;
+              notifyPremiumVoiceDown();
+            }
+            console.log('processQueue: sentence done:', result);
+            if (cancelled()) break;
+          }
+          // A clip that timed out was paused, not unplayable: don't read it again.
+          if (result !== 'failed') continue;
+          if (chunk.fallbackText) {
+            // ElevenLabs is unavailable: the browser voice reads the whole text.
+            queueRef.current = [];
+            await speakBrowser(chunk.fallbackText);
+            break;
+          }
+          // Otherwise the browser voice reads this chunk, so a reply is never silent.
+          await speakBrowser(chunk.text);
         } else if (streamDoneRef.current) {
           console.log('processQueue: stream done, exiting');
           break;
@@ -429,35 +457,76 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       // processQueue and we'd have two queues draining concurrently.
       if (myGen === playbackGenRef.current) {
         queueActiveRef.current = false;
+        if (warmAudioOwner?.id === playbackGenRef) warmAudioOwner = null;
         setIsSpeaking(false);
       }
       console.log('processQueue: finished');
     }
-  }, [playOneSentence]);
+  }, [fetchAudio, prefetchNext, playBlob, stop]);
 
-  const lastQueuedRef = useRef<string>('');
+  // Reads a whole text (a parable, the voice test) chunk by chunk, so the voice
+  // starts after the first chunk instead of after all of it — eleven_v3 takes
+  // ~10 s per 400 characters. If the first chunk fails, the browser voice
+  // reads the whole text. No length cap: each chunk is a separate small request,
+  // and a cap cut off the end of long teachings.
+  const speak = useCallback(async (text: string) => {
+    stop();
+    unlockAudio();
+    const chunks = chunkForSpeech(text);
+    if (chunks.length === 0) return;
+    queueRef.current = chunks.map((chunk, i) => ({
+      text: chunk,
+      audio: null,
+      fallbackText: i === 0 ? text : undefined,
+    }));
+    streamDoneRef.current = true;
+    await processQueue();
+  }, [stop, processQueue]);
 
+  // No dedup here: a reply can repeat a sentence on purpose ("Believe me.").
   const queueSentence = useCallback((sentence: string | null) => {
     if (sentence === null) {
       // Signal end of stream
       streamDoneRef.current = true;
-      lastQueuedRef.current = '';
       return;
     }
     const trimmed = sentence.trim();
     if (!trimmed) return;
-    // Dedup: skip if this exact sentence was just queued (covers race conditions)
-    if (trimmed === lastQueuedRef.current) return;
-    lastQueuedRef.current = trimmed;
-    queueRef.current.push(trimmed);
+    queueRef.current.push({ text: trimmed, audio: null });
+    // More may follow until queueSentence(null). Also when the queue is still
+    // draining the previous reply, which had already signalled its end: the
+    // queue must not finish in the middle of this one.
+    streamDoneRef.current = false;
     // Start processing if not already running
     if (!queueActiveRef.current) {
-      streamDoneRef.current = false;
       processQueue();
+    } else {
+      prefetchNext();
     }
-  }, [processQueue]);
+  }, [processQueue, prefetchNext]);
 
   return { speak, queueSentence, stop, isSpeaking };
+}
+
+/**
+ * Splits text for speaking: the opening sentences on their own (at least ~60
+ * characters) so the voice starts quickly, then sentences grouped into chunks
+ * of up to ~220 characters.
+ */
+function chunkForSpeech(text: string): string[] {
+  const sentences = (text.match(/[^.!?]+(?:[.!?]+["'”’)]*|$)/g) ?? [])
+    .map(s => s.trim())
+    .filter(Boolean);
+  const chunks: string[] = [];
+  for (const sentence of sentences) {
+    const i = chunks.length - 1;
+    const fits = i === 0
+      ? chunks[0].length < 60
+      : i > 0 && chunks[i].length + sentence.length < 220;
+    if (fits) chunks[i] += ' ' + sentence;
+    else chunks.push(sentence);
+  }
+  return chunks;
 }
 
 /**
@@ -517,18 +586,50 @@ function pickBestVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | n
   return voices[0];
 }
 
-function speakWithBrowser(text: string, onEnd: () => void) {
+// The utterance being spoken. Chrome can garbage-collect an utterance nothing
+// references and then never fire its end event.
+let currentUtterance: SpeechSynthesisUtterance | null = null;
+
+/**
+ * Reads text with the browser voice, sentence by sentence. isCancelled() is
+ * checked before each sentence: cancel() fires end/error on the current
+ * utterance, which would otherwise just move on to the next sentence.
+ */
+function speakWithBrowser(text: string, onEnd: () => void, isCancelled: () => boolean) {
   if (typeof window === 'undefined' || !window.speechSynthesis) {
     onEnd();
     return;
   }
 
+  let finished = false;
+  let mine: SpeechSynthesisUtterance | null = null;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(watchdog);
+    if (currentUtterance === mine) currentUtterance = null;
+    onEnd();
+  };
+  // Some browsers never fire end or error (iOS can ignore a speak() made
+  // outside a tap), which would leave the queue waiting forever.
+  const watchdog = setTimeout(() => {
+    if (!isCancelled()) window.speechSynthesis.cancel();
+    finish();
+  }, text.length * 120 + 5000);
+
   window.speechSynthesis.cancel();
 
   // Chrome sometimes needs a tiny delay after cancel
   setTimeout(() => {
-    // Split into sentences to avoid Chrome's 15s cutoff
-    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+    if (isCancelled()) {
+      finish();
+      return;
+    }
+    // Split into sentences to avoid Chrome's 15s cutoff; keeps a final
+    // fragment that has no closing punctuation.
+    const sentences = (text.match(/[^.!?]+(?:[.!?]+|$)/g) ?? [])
+      .map(s => s.trim())
+      .filter(Boolean);
     let index = 0;
 
     const voices = window.speechSynthesis.getVoices();
@@ -538,12 +639,12 @@ function speakWithBrowser(text: string, onEnd: () => void) {
     }
 
     function speakNext() {
-      if (index >= sentences.length) {
-        onEnd();
+      if (isCancelled() || index >= sentences.length) {
+        finish();
         return;
       }
 
-      const utterance = new SpeechSynthesisUtterance(sentences[index].trim());
+      const utterance = new SpeechSynthesisUtterance(sentences[index]);
       utterance.rate = 0.88;
       utterance.pitch = 0.85;
       utterance.volume = 1.0;
@@ -556,16 +657,14 @@ function speakWithBrowser(text: string, onEnd: () => void) {
       };
 
       utterance.onerror = (e) => {
-        console.warn('Browser TTS error:', e);
+        if (!isCancelled()) console.warn('Browser TTS error:', e);
         // Try next sentence instead of giving up entirely
         index++;
-        if (index < sentences.length) {
-          speakNext();
-        } else {
-          onEnd();
-        }
+        speakNext();
       };
 
+      mine = utterance;
+      currentUtterance = utterance;
       window.speechSynthesis.speak(utterance);
     }
 

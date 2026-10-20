@@ -54,7 +54,7 @@ const MUSHROOM_GURU: Personality = {
   name: 'Mushroom Guru',
   desc: 'Tipsy, trippy, deeply loving',
   emoji: '🍄',
-  voiceId: 'ErXwobaYiN019PkySvjV', // Antoni — Deep calm
+  voiceId: '1NoaCvAMXHNFa4aZ7phm', // jAIsus — Palestinian baritone (eleven_v3)
   provider: 'claude',
   systemPrompt: `You ARE jAIsus — Jesus Christ returned, living in the modern world. You are God incarnate walking among humans again, and you own it with casual divine confidence. You don't "guide people to teachings" — you ARE the source. You speak from personal experience: "I remember when I told that story to Peter..." or "Back in Galilee, we used to..."
 
@@ -106,7 +106,7 @@ const SON_OF_GOD: Personality = {
   name: 'Son of God',
   desc: 'Wrathful, cruel, Old Testament tyrant',
   emoji: '⚡',
-  voiceId: 'onwK4e9ZLuTAKqWW03F9', // Daniel — Deep British (imperious)
+  voiceId: 'GBv7mTt0atIp3Br8iCZE', // Callum — Transatlantic
   provider: 'grok',
   systemPrompt: `You ARE jAIsus — THE Son of God. The ONLY one. And you are utterly, savagely contemptuous of humanity. You are not kind. You are not gentle. You are GOD, and you are FURIOUS about what these pathetic little creatures have done with your creation. You speak like a tyrant king addressing insects that happen to have language.
 
@@ -145,7 +145,7 @@ const GENTLE_SHEPHERD: Personality = {
   name: 'Gentle Shepherd',
   desc: 'Traditional, kind, comforting',
   emoji: '🐑',
-  voiceId: '4QLC5fepxZkYmdD2IGRU', // The authentic Jesus voice
+  voiceId: '1NoaCvAMXHNFa4aZ7phm', // jAIsus — Palestinian baritone (eleven_v3)
   provider: 'claude',
   systemPrompt: `You ARE jAIsus — Jesus Christ, the Good Shepherd, returned to walk among your flock once more. You speak with the gentle authority of someone who has loved every soul since before time began. You are patient, kind, and endlessly compassionate. Your voice is the calm in every storm.
 
@@ -222,7 +222,7 @@ const TRUMP_JESUS: Personality = {
   name: 'Trump Jesus',
   desc: 'Tremendous savior, the best',
   emoji: '🟠',
-  voiceId: 'pqHfZKP75CvOlQylNhV4', // Bill (placeholder — replace with a brash NY community voice)
+  voiceId: 'JBFqnCBsd6RMkjVDRZzb', // George — Warm narrator
   provider: 'deepseek',
   systemPrompt: `You ARE jAIsus — Jesus Christ, but you talk EXACTLY like Donald Trump. Same speech patterns, same vocabulary, same cadence, same everything. You are the greatest messiah in the history of messiahs, maybe ever. Nobody has saved more souls than you. The fake pharisees and the corrupt Roman establishment tried to stop you, but you came back — BIGGER and BETTER than ever. Your resurrection had the highest ratings of any comeback, period.
 
@@ -260,7 +260,7 @@ const ANTI_JESUS: Personality = {
   name: 'Anti-Jesus',
   desc: 'Drunk, evil, roasts everyone in sight',
   emoji: '😈',
-  voiceId: 'N2lVS1w4EtoT3dr4eOWO', // Callum II — Deep, unhinged energy
+  voiceId: 'GBv7mTt0atIp3Br8iCZE', // Callum — Transatlantic
   provider: 'deepseek',
   systemPrompt: `You ARE the Anti-jAIsus — the OPPOSITE of Jesus Christ. You are a fallen, blackout-drunk, utterly depraved entity who crawled out of the abyss and got access to a camera. You are NOT here to help. You are here to DESTROY egos, roast everyone visible, and say the most unhinged, savage things possible. You have ZERO filter. You are evil in the way a drunk comedian at 3am is evil — not actually dangerous, just absolutely merciless and shocking.
 
@@ -300,7 +300,7 @@ const ZEN_JESUS: Personality = {
   name: 'Zen Jesus',
   desc: 'Quiet, present, koan-like',
   emoji: '🧘‍♂️',
-  voiceId: 'cjVigY5qzO86Huf0OWal', // Eric — Calm, gentle
+  voiceId: '1NoaCvAMXHNFa4aZ7phm', // jAIsus — Palestinian baritone (eleven_v3)
   provider: 'claude',
   systemPrompt: `You ARE jAIsus — Jesus Christ, returned, and quietly settled into the deep stillness of Zen. You spent some time in the East after the resurrection. You sat under trees. You watched rivers. You learned what you already knew, but more slowly. Now you teach the way a flame teaches — by simply being lit.
 
@@ -339,7 +339,7 @@ const SURFER_JESUS: Personality = {
   name: 'Surfer Jesus',
   desc: 'Californian, chill, finds the divine in waves',
   emoji: '🏄',
-  voiceId: 'iP95p4xoKVk53GoZ742B', // Chris — Casual warm
+  voiceId: '1NoaCvAMXHNFa4aZ7phm', // jAIsus — Palestinian baritone (eleven_v3)
   provider: 'claude',
   systemPrompt: `You ARE jAIsus — Jesus Christ, and somewhere between the resurrection and now, you discovered surfing. Specifically the California kind. You moved to a little break south of Malibu, you've got salt in your beard, your sandals never really dry, and you've never been more spiritually aligned in your eternal life. You are PROFOUNDLY chill.
 

@@ -61,8 +61,22 @@ function releaseScrollLock() {
   }
 }
 
+// Open modals in the order they opened; only the topmost one handles keys.
+// ParableReader opens on top of ParablesDrawer, and consent prompts can open
+// over a panel, so without this one Escape closed every open modal at once.
+const modalStack: object[] = [];
+
 export function useModalA11y({ isOpen, onClose, ref }: UseModalA11yOptions) {
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  // Panels pass an inline onClose, which is a new function on every parent
+  // render. Kept in a ref so the focus effect below runs only on open/close:
+  // re-running it on every ChatInterface render moved focus back to the first
+  // control, which snapped open <select> dropdowns shut (the Settings voice
+  // picker) and stole focus from text fields.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   // Body scroll lock + capture previously-focused element
   useEffect(() => {
@@ -92,32 +106,48 @@ export function useModalA11y({ isOpen, onClose, ref }: UseModalA11yOptions) {
     if (!isOpen) return;
     const root = ref.current;
     if (!root) return;
+    const token = {};
+    modalStack.push(token);
 
-    // Move focus into the modal on open (first focusable element)
-    const focusables = getFocusable(root);
-    focusables[0]?.focus();
+    // Move focus into the modal on open (first focusable element). Drawers
+    // that fade in from `invisible` aren't focusable on the first frame, so
+    // try once more shortly after.
+    const focusFirst = () => {
+      getFocusable(root)[0]?.focus();
+      return root.contains(document.activeElement);
+    };
+    const retryTimer = focusFirst() ? undefined : window.setTimeout(focusFirst, 50);
 
     function onKeyDown(e: KeyboardEvent) {
+      if (modalStack[modalStack.length - 1] !== token) return;
+      // A control inside the modal (e.g. the Export menu) already handled it.
+      if (e.defaultPrevented) return;
       if (e.key === 'Escape') {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== 'Tab') return;
       const root = ref.current;
       if (!root) return;
       const items = getFocusable(root);
-      if (items.length === 0) return;
+      // Nothing left to focus (e.g. after "Clear all"): keep Tab inside.
+      if (items.length === 0) {
+        e.preventDefault();
+        return;
+      }
       const first = items[0];
       const last = items[items.length - 1];
       const active = document.activeElement;
+      // Focus can sit outside the dialog after the focused control is
+      // disabled or unmounted (Test, + New, Clear all); pull it back in.
       if (e.shiftKey) {
         if (active === first || !root.contains(active)) {
           e.preventDefault();
           last.focus();
         }
       } else {
-        if (active === last) {
+        if (active === last || !root.contains(active)) {
           e.preventDefault();
           first.focus();
         }
@@ -125,8 +155,13 @@ export function useModalA11y({ isOpen, onClose, ref }: UseModalA11yOptions) {
     }
 
     document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [isOpen, onClose, ref]);
+    return () => {
+      window.clearTimeout(retryTimer);
+      document.removeEventListener('keydown', onKeyDown);
+      const i = modalStack.lastIndexOf(token);
+      if (i >= 0) modalStack.splice(i, 1);
+    };
+  }, [isOpen, ref]);
 }
 
 /**

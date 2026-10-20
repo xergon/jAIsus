@@ -23,14 +23,13 @@ import { createElement, type CSSProperties, type ReactElement } from 'react';
 import { clientKey, rateLimitAsync, rateLimitResponse } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
-export const contentType = 'image/png';
 
 // Crawlers + social-media unfurl bots hammer this endpoint. Rendering a PNG
 // uses real Satori CPU. Cap to 120-burst / 2-per-sec sustained so a misbehaving
 // scraper can't run up edge-compute bills. Legitimate traffic (real shares +
 // CDN cache misses) is rare enough that this is comfortable.
 const OG_LIMIT = { capacity: 120, refillRatePerSec: 2 };
-export const size = { width: 1200, height: 630 };
+const size = { width: 1200, height: 630 };
 
 // ---------- design tokens (Tailwind stone/amber palette) ----------
 const COLORS = {

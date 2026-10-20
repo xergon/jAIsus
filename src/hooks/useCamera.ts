@@ -59,6 +59,7 @@ export function useCamera(): UseCameraResult {
   // the 10s capture interval, multiple fetches stack up — wasting quota AND
   // racing on setSceneDescription. The guard makes overlapping calls a no-op.
   const visionInFlightRef = useRef(false);
+  const startingRef = useRef(false);
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -97,6 +98,9 @@ export function useCamera(): UseCameraResult {
       return;
     }
 
+    // A reply that lands after the camera was turned off (or restarted) must
+    // not touch state or the in-flight flag of the new session.
+    const gen = generationRef.current;
     visionInFlightRef.current = true;
     try {
       const response = await fetch('/api/vision', {
@@ -104,15 +108,18 @@ export function useCamera(): UseCameraResult {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: frame }),
       });
+      if (gen !== generationRef.current) return;
 
       if (!response.ok) {
         const body = await response.text();
         console.error('Vision API error:', response.status, body);
+        if (gen !== generationRef.current) return;
         setError(`Vision API error: ${response.status}`);
         return; // visionInFlightRef.current reset by the finally block below
       }
 
       const data = await response.json();
+      if (gen !== generationRef.current) return;
       if (data.description && activeRef.current) {
         const now = Date.now();
         console.log('Scene [fresh]:', data.description);
@@ -126,71 +133,15 @@ export function useCamera(): UseCameraResult {
     } catch (err) {
       console.error('Frame analysis error:', err);
     } finally {
-      visionInFlightRef.current = false;
+      if (gen === generationRef.current) visionInFlightRef.current = false;
     }
   }, [captureFrame]);
-
-  const startCamera = useCallback(async () => {
-    if (!isSupported) {
-      setError('Camera not supported in this browser');
-      return;
-    }
-
-    // Audit fix: in-flight guard against rapid double-tap on the toggle
-    // button. Without this, two near-simultaneous calls each call
-    // getUserMedia in parallel — the generation guard saves one, the other
-    // installs a second stream that overwrites streamRef.current and
-    // orphans the first track set.
-    if (streamRef.current || activeRef.current) return;
-
-    // Capture generation before awaiting — if stopCamera/unmount bumps the
-    // generation before getUserMedia resolves, we must NOT install the stream.
-    const gen = generationRef.current;
-
-    try {
-      setError(null);
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      });
-
-      // Stale resolution — user canceled or component unmounted while the
-      // permission prompt was open. Stop the tracks immediately to release
-      // the hardware indicator and prevent the orphan-stream leak.
-      if (gen !== generationRef.current) {
-        stream.getTracks().forEach(t => t.stop());
-        return;
-      }
-
-      streamRef.current = stream;
-      activeRef.current = true;
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => {});
-      }
-
-      setIsActive(true);
-
-      // First frame after camera warms up, then every 10s
-      firstFrameTimeoutRef.current = setTimeout(() => analyzeFrame(), 1500);
-      intervalRef.current = setInterval(() => analyzeFrame(), CAPTURE_INTERVAL);
-    } catch (err) {
-      // If stale, swallow silently — user already turned camera off
-      if (gen !== generationRef.current) return;
-      console.warn('Camera error:', err);
-      if ((err as Error).name === 'NotAllowedError') {
-        setError('Camera access denied. Please allow camera access.');
-      } else {
-        setError('Could not access camera.');
-      }
-    }
-  }, [isSupported, analyzeFrame]);
 
   const stopCamera = useCallback(() => {
     // Bump generation FIRST so any in-flight getUserMedia bails out
     generationRef.current++;
     activeRef.current = false;
+    visionInFlightRef.current = false;
 
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
@@ -214,7 +165,78 @@ export function useCamera(): UseCameraResult {
     setIsActive(false);
     setSceneDescription(null);
     setSceneTimestamp(0);
+    setError(null);
   }, []);
+
+  const startCamera = useCallback(async () => {
+    if (!isSupported) {
+      setError('Camera not supported in this browser');
+      return;
+    }
+
+    // In-flight guard against a second tap on the toggle. streamRef and
+    // activeRef are only set once getUserMedia resolves, so startingRef covers
+    // the permission prompt and camera warm-up; without it a second call
+    // installs a second stream and the first one is never stopped.
+    if (streamRef.current || activeRef.current || startingRef.current) return;
+
+    // Capture generation before awaiting — if stopCamera/unmount bumps the
+    // generation before getUserMedia resolves, we must NOT install the stream.
+    const gen = generationRef.current;
+    startingRef.current = true;
+
+    try {
+      setError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+
+      // Stale resolution — user canceled or component unmounted while the
+      // permission prompt was open. Stop the tracks immediately to release
+      // the hardware indicator and prevent the orphan-stream leak.
+      if (gen !== generationRef.current || streamRef.current) {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+
+      streamRef.current = stream;
+      activeRef.current = true;
+
+      // The browser can end the track on its own (webcam unplugged, camera
+      // permission revoked). Turn the camera UI off instead of leaving a
+      // frozen preview; track.stop() from stopCamera does not fire 'ended'.
+      stream.getVideoTracks().forEach(track => {
+        track.addEventListener('ended', () => {
+          if (streamRef.current !== stream) return;
+          stopCamera();
+          setError('Camera disconnected. Tap the camera to turn it back on.');
+        });
+      });
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(() => {});
+      }
+
+      setIsActive(true);
+
+      // First frame after camera warms up, then every 10s
+      firstFrameTimeoutRef.current = setTimeout(() => analyzeFrame(), 1500);
+      intervalRef.current = setInterval(() => analyzeFrame(), CAPTURE_INTERVAL);
+    } catch (err) {
+      // If stale, swallow silently — user already turned camera off
+      if (gen !== generationRef.current) return;
+      console.warn('Camera error:', err);
+      if ((err as Error).name === 'NotAllowedError') {
+        setError('Camera access denied. Please allow camera access.');
+      } else {
+        setError('Could not access camera.');
+      }
+    } finally {
+      startingRef.current = false;
+    }
+  }, [isSupported, analyzeFrame, stopCamera]);
 
   const toggle = useCallback(() => {
     if (isActive) {
@@ -223,6 +245,18 @@ export function useCamera(): UseCameraResult {
       startCamera();
     }
   }, [isActive, startCamera, stopCamera]);
+
+  // The <video> can remount while the stream keeps running (the voice layout
+  // unmounts when auto-speak is turned off and comes back later). Hand the live
+  // stream to the new element so the preview and frame capture keep working.
+  useEffect(() => {
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (video && stream && video.srcObject !== stream) {
+      video.srcObject = stream;
+      video.play().catch(() => {});
+    }
+  });
 
   useEffect(() => {
     return () => {

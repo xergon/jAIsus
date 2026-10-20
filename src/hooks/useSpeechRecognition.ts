@@ -30,6 +30,9 @@ interface WindowWithSpeech {
   webkitSpeechRecognition?: new () => SpeechRecognitionInstance;
 }
 
+/** Why a listen ended: something was heard and sent, nothing was said, or recognition failed. */
+export type SpeechSessionEnd = 'result' | 'empty' | 'error';
+
 interface SpeechRecognitionHookResult {
   transcript: string;
   interimTranscript: string;
@@ -37,30 +40,61 @@ interface SpeechRecognitionHookResult {
   isSupported: boolean;
   error: string | null;
   start: () => void;
-  stop: () => void;
+  /** Stops listening and sends what was heard. Returns true if something was sent. */
+  stop: () => boolean;
+  /** Stops listening and throws away what was heard. */
+  cancel: () => void;
+  clearError: () => void;
 }
 
+// Once the user has started talking, listening ends after this much silence.
+const SILENCE_MS = 4500;
+// With no speech at all, listening gives up after this long.
+const NO_SPEECH_MS = 10000;
+
+const ERROR_MESSAGES: Record<string, string> = {
+  'not-allowed': 'Microphone access denied. Please allow microphone access in your browser settings.',
+  'service-not-allowed': 'Speech recognition is blocked in this browser. You can type instead.',
+  'audio-capture': 'No microphone found. Check that one is connected and allowed.',
+  'network': 'Speech recognition needs an internet connection. Please try again.',
+  'language-not-supported': 'Speech recognition is not available for this language.',
+};
+
+function joinText(a: string, b: string): string {
+  return [a.trim(), b.trim()].filter(Boolean).join(' ');
+}
+
+/**
+ * Listens until the user has been silent for SILENCE_MS, then sends what was
+ * heard through onResult.
+ *
+ * Browsers end recognition sessions on their own: Android Chrome and iOS
+ * Safari on short pauses (even with continuous = true), desktop Chrome after a
+ * no-speech timeout or about a minute. Each such end starts a new session and
+ * keeps the text heard so far, so a pause shorter than SILENCE_MS never cuts
+ * the user off.
+ */
 export function useSpeechRecognition(
-  onResult?: (transcript: string) => void
+  onResult?: (transcript: string) => void,
+  onSessionEnd?: (reason: SpeechSessionEnd) => void,
 ): SpeechRecognitionHookResult {
   const [transcript, setTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const onResultRef = useRef(onResult);
-  const lastInterimRef = useRef<string>('');
-  const submittedRef = useRef(false);
-  // Audit fix: generation counter so a silence-timer fired from a prior
-  // start() can't submit OLD speech text or call .stop() against the new
-  // recognition. Every start() bumps it; every async callback checks it.
-  const generationRef = useRef(0);
+  const onSessionEndRef = useRef(onSessionEnd);
+  // The listen in progress; finish() ends it ('submit' sends what was heard).
+  const listenRef = useRef<{ finish: (mode: 'submit' | 'cancel') => boolean } | null>(null);
+  // Set on unmount so a listen that ends afterwards calls nothing.
+  const unmountedRef = useRef(false);
 
-  // Keep onResult ref updated without causing re-renders
+  // Keep callback refs updated without causing re-renders
   useEffect(() => {
     onResultRef.current = onResult;
-  }, [onResult]);
+    onSessionEndRef.current = onSessionEnd;
+  }, [onResult, onSessionEnd]);
 
   useEffect(() => {
     const w = window as unknown as WindowWithSpeech;
@@ -69,187 +103,166 @@ export function useSpeechRecognition(
     setIsSupported(supported);
   }, []);
 
-  const stop = useCallback(() => {
-    try {
-      recognitionRef.current?.stop();
-    } catch {
-      // May throw if already stopped
-    }
-    setIsListening(false);
-    setInterimTranscript('');
-    lastInterimRef.current = '';
-  }, []);
+  const stop = useCallback(() => listenRef.current?.finish('submit') ?? false, []);
+  const cancel = useCallback(() => { listenRef.current?.finish('cancel'); }, []);
+  const clearError = useCallback(() => setError(null), []);
 
   const start = useCallback(() => {
     if (!isSupported) {
       setError('Speech recognition is not supported in this browser');
       return;
     }
-
-    // Bump generation FIRST so any pending timers/handlers from a prior
-    // start() know they've been superseded.
-    const myGen = ++generationRef.current;
-
-    // Stop any existing recognition
-    try {
-      recognitionRef.current?.abort();
-    } catch {
-      // Ignore
-    }
-
-    setError(null);
+    // Already listening: keep the current listen (and what it has heard).
+    if (listenRef.current) return;
 
     const w = window as unknown as WindowWithSpeech;
     const SpeechRecognition = w.SpeechRecognition || w.webkitSpeechRecognition;
     if (!SpeechRecognition) { setError('Speech recognition not available'); return; }
-    const recognition = new SpeechRecognition();
-    recognitionRef.current = recognition;
 
-    // continuous = true: we manage end-of-speech via a silence timeout.
-    // This prevents Chrome from cutting off mid-sentence on brief pauses.
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-    submittedRef.current = false;
+    // Android Chrome repeats earlier words in each new final result.
+    const cumulativeResults = /Android/i.test(navigator.userAgent);
 
-    // Silence timeout: submit after ~2s of no new speech activity.
-    // Two-part fix (live user feedback "2s was better, but mid-sentence
-    // it would interrupt"):
-    //   1. The 2s threshold was correct — 3s felt sluggish.
-    //   2. The mid-sentence cutoff came from the silence timer being
-    //      armed BEFORE the user started speaking (so a 2s gather-thought
-    //      pause killed recognition before they uttered a word). Fixed
-    //      by only arming the timer on the first onresult that carries
-    //      real text — see onresult below.
-    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
-    let accumulatedText = '';
-    let hasReceivedAnyResult = false;
-    const SILENCE_MS = 2000;
+    let committed = '';   // text from earlier sessions of this listen
+    let sessionText = ''; // text of the current session
+    let heardSpeech = false;
+    let done = false;
+    let recognition: SpeechRecognitionInstance | null = null;
+    let sessionStartedAt = 0;
+    let quickEnds = 0;
+    let silenceTimer: ReturnType<typeof setTimeout> | undefined;
+    let restartTimer: ReturnType<typeof setTimeout> | undefined;
 
-    function resetSilenceTimer() {
-      if (silenceTimer) clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(() => {
-        // Audit fix: a rapid double-start would otherwise reset submittedRef
-        // to false on the new start, and the OLD timer (still alive) would
-        // then fire onResultRef with stale text. Gate on generation match.
-        if (myGen !== generationRef.current) return;
-        // SILENCE_MS of silence — submit what we have and stop
-        if (!submittedRef.current && accumulatedText.trim()) {
-          submittedRef.current = true;
-          const text = accumulatedText.trim();
-          console.log('Speech silence timeout submit:', text);
-          setTranscript(text);
-          setInterimTranscript('');
-          lastInterimRef.current = '';
-          onResultRef.current?.(text);
-        }
-        try { recognition.stop(); } catch { /* */ }
-      }, SILENCE_MS);
-    }
+    const heard = () => joinText(committed, sessionText);
 
-    recognition.onstart = () => {
-      setIsListening(true);
-      setTranscript('');
-      setInterimTranscript('');
-      setError(null);
-      accumulatedText = '';
-      hasReceivedAnyResult = false;
-      // Intentionally NOT arming the silence timer here — see comment above.
-      // The user gets unlimited time to start speaking; recognition is
-      // armed for cutoff only after they actually begin.
-    };
-
-    recognition.onresult = (event) => {
-      if (myGen !== generationRef.current) return;
-      if (submittedRef.current) return;
-
-      // Rebuild full transcript from all results
-      let full = '';
-      let interim = '';
-      for (let i = 0; i < event.results.length; i++) {
-        const result = event.results[i];
-        if (result.isFinal) {
-          full += result[0].transcript;
-        } else {
-          interim += result[0].transcript;
-        }
+    function finish(mode: 'submit' | 'cancel' | 'error'): boolean {
+      if (done) return false;
+      done = true;
+      clearTimeout(silenceTimer);
+      clearTimeout(noSpeechTimer);
+      clearTimeout(restartTimer);
+      if (listenRef.current === handle) listenRef.current = null;
+      const rec = recognition;
+      recognition = null;
+      if (rec) {
+        rec.onstart = rec.onresult = rec.onerror = rec.onend = null;
+        try { rec.abort(); } catch { /* already ended */ }
       }
-
-      const newText = (full + interim).trim();
-
-      // Two-stage gating:
-      //   - To DECIDE the user has begun speaking (and thus arm the silence
-      //     timer for the first time), require non-empty transcript.
-      //   - But ONCE armed, reset the timer on ANY onresult, even one whose
-      //     interim is briefly empty mid-utterance. Chrome will fire empty
-      //     interim ticks while it's actively processing a long sentence;
-      //     ignoring them would let the silence timer fire mid-thought.
-      //     The previous version filtered empty results entirely, which
-      //     contributed to user-reported mid-sentence cutoffs.
-      if (newText) {
-        hasReceivedAnyResult = true;
-        accumulatedText = full + interim;
-        setInterimTranscript(accumulatedText);
-        lastInterimRef.current = accumulatedText;
-      }
-
-      // Reset silence timer if we've ever heard real speech in this session.
-      // Empty result while no speech has happened yet is ignored.
-      if (hasReceivedAnyResult) {
-        resetSilenceTimer();
-      }
-    };
-
-    recognition.onerror = (event) => {
-      console.warn('Speech recognition error:', event.error);
-      if (silenceTimer) clearTimeout(silenceTimer);
-      if (event.error === 'not-allowed') {
-        setError('Microphone access denied. Please allow microphone access in your browser settings.');
-      } else if (event.error === 'no-speech') {
-        setError('No speech detected. Try again.');
-      } else if (event.error !== 'aborted') {
-        setError(`Recognition error: ${event.error}`);
-      }
+      const text = heard();
+      // Cleared in the same callback as onResult so React batches them with
+      // the caller's state change (the mic doesn't linger in 'listening').
       setIsListening(false);
       setInterimTranscript('');
-    };
-
-    recognition.onend = () => {
-      if (silenceTimer) clearTimeout(silenceTimer);
-      if (myGen !== generationRef.current) return;
-      // If recognition ended without submitting, submit whatever we have
-      if (!submittedRef.current && accumulatedText.trim()) {
-        const text = accumulatedText.trim();
-        console.log('Speech onend fallback submit:', text);
-        submittedRef.current = true;
-        lastInterimRef.current = '';
+      if (unmountedRef.current || mode === 'cancel') return false;
+      if (text) {
         setTranscript(text);
-        setInterimTranscript('');
         onResultRef.current?.(text);
       }
-      setIsListening(false);
-    };
-
-    try {
-      recognition.start();
-    } catch (err) {
-      console.warn('Failed to start recognition:', err);
-      setError('Failed to start speech recognition. Please try again.');
-      setIsListening(false);
+      onSessionEndRef.current?.(mode === 'error' ? 'error' : text ? 'result' : 'empty');
+      return !!text;
     }
+
+    function armSilenceTimer() {
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(() => finish('submit'), SILENCE_MS);
+    }
+
+    function startSession() {
+      if (done) return;
+      const rec = new SpeechRecognition!();
+      recognition = rec;
+      sessionText = '';
+      sessionStartedAt = 0;
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = 'en-US';
+
+      rec.onstart = () => { sessionStartedAt = Date.now(); };
+
+      rec.onresult = (event) => {
+        if (rec !== recognition) return;
+        let finals = '';
+        let interim = '';
+        for (let i = 0; i < event.results.length; i++) {
+          const result = event.results[i];
+          const t = result[0].transcript;
+          if (!result.isFinal) interim = joinText(interim, t);
+          else if (cumulativeResults && finals && t.trim().toLowerCase().startsWith(finals.toLowerCase())) finals = t.trim();
+          else finals = joinText(finals, t);
+        }
+        const text = cumulativeResults && finals && interim.toLowerCase().startsWith(finals.toLowerCase())
+          ? interim
+          : joinText(finals, interim);
+        if (text) {
+          sessionText = text;
+          if (!heardSpeech) {
+            heardSpeech = true;
+            clearTimeout(noSpeechTimer);
+            setError(null);
+          }
+          setInterimTranscript(heard());
+        }
+        // Chrome sends empty interim results while still processing a long
+        // sentence; once the user has spoken they count as activity too.
+        if (heardSpeech) armSilenceTimer();
+      };
+
+      rec.onerror = (event) => {
+        if (rec !== recognition) return;
+        // The session ends after these; onend decides whether to go on.
+        if (event.error === 'no-speech' || event.error === 'aborted') return;
+        console.warn('Speech recognition error:', event.error);
+        setError(ERROR_MESSAGES[event.error] ?? 'Speech recognition stopped. Please try again.');
+        finish('error');
+      };
+
+      rec.onend = () => {
+        if (rec !== recognition) return;
+        committed = heard();
+        sessionText = '';
+        recognition = null;
+        // A browser that ends every session at once can't be kept listening,
+        // and a backgrounded page can't restart the mic.
+        quickEnds = sessionStartedAt && Date.now() - sessionStartedAt > 1000 ? 0 : quickEnds + 1;
+        if (document.hidden || quickEnds >= 3) {
+          finish('submit');
+          return;
+        }
+        restartTimer = setTimeout(startSession, 100);
+      };
+
+      try {
+        rec.start();
+      } catch (err) {
+        console.warn('Failed to start recognition:', err);
+        recognition = null;
+        if (++quickEnds >= 3) {
+          setError('Failed to start speech recognition. Please try again.');
+          finish('error');
+        } else {
+          restartTimer = setTimeout(startSession, 300);
+        }
+      }
+    }
+
+    const handle = { finish: (mode: 'submit' | 'cancel') => finish(mode) };
+    listenRef.current = handle;
+    const noSpeechTimer = setTimeout(() => { if (!heardSpeech) finish('submit'); }, NO_SPEECH_MS);
+    setError(null);
+    setTranscript('');
+    setInterimTranscript('');
+    setIsListening(true);
+    startSession();
   }, [isSupported]);
 
   useEffect(() => {
+    unmountedRef.current = false;
+    const listen = listenRef;
     return () => {
-      // Bump generation so any still-pending silence timer no-ops on fire.
-      generationRef.current++;
-      try {
-        recognitionRef.current?.abort();
-      } catch {
-        // Ignore
-      }
+      // Unmount: end any listen without calling back into the unmounted owner.
+      unmountedRef.current = true;
+      listen.current?.finish('cancel');
     };
   }, []);
 
-  return { transcript, interimTranscript, isListening, isSupported, error, start, stop };
+  return { transcript, interimTranscript, isListening, isSupported, error, start, stop, cancel, clearError };
 }

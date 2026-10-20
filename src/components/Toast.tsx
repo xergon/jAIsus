@@ -294,7 +294,9 @@ export function ToastProvider() {
       // Audit fix: add safe-area-inset-top so toasts don't sit under the
       // notch / status bar when running as a PWA on notched iPhones.
       className="fixed inset-x-0 z-[100] flex flex-col items-center gap-2 px-4 pointer-events-none"
-      style={{ top: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
+      // Full-screen views with their own top bar (ParableReader) set
+      // --toast-top-offset so toasts sit below their controls.
+      style={{ top: 'calc(env(safe-area-inset-top, 0px) + var(--toast-top-offset, 1rem))' }}
       aria-label="Notifications"
     >
       {toasts.map((t) => (

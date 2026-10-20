@@ -11,6 +11,8 @@ interface SpeakingHintProps {
   /** Optional callback when user taps the hint (e.g., to actually stop speech) */
   onInterrupt?: () => void;
   className?: string;
+  /** Distance from the bottom of the viewport in px. Defaults to 96 (bottom-24). */
+  bottomPx?: number;
 }
 
 /**
@@ -59,6 +61,7 @@ export function SpeakingHint({
   autoHideMs = 4000,
   onInterrupt,
   className,
+  bottomPx,
 }: SpeakingHintProps): JSX.Element | null {
   // Whether the hint should currently be visible. Independent from voiceState
   // because we hide it after the auto-hide timeout even while still speaking.
@@ -139,6 +142,12 @@ export function SpeakingHint({
         shownThisEventRef.current = true;
         sessionShowCountRef.current += 1;
 
+        // A fade-out still pending from the last hide would unmount the
+        // pill 200 ms after it reappears.
+        if (exitTimerRef.current !== null) {
+          clearTimeout(exitTimerRef.current);
+          exitTimerRef.current = null;
+        }
         // Mount + start enter transition.
         setVisible(true);
         if (reducedMotion) {
@@ -227,7 +236,8 @@ export function SpeakingHint({
     // Audit fix: z-30 sat BELOW the sticky input bar's blurred background
     // on small viewports. Bumped to z-40 so the "Tap to interrupt" pill
     // always reads clearly.
-    'fixed bottom-24 left-1/2 -translate-x-1/2 z-40',
+    'fixed left-1/2 -translate-x-1/2 z-40',
+    bottomPx === undefined ? 'bottom-24' : '',
     // Pill styling.
     'bg-stone-900/80 backdrop-blur-sm text-white',
     'rounded-full px-4 py-2 shadow-lg',
@@ -252,6 +262,7 @@ export function SpeakingHint({
       aria-live="polite"
       aria-label="jAIsus is speaking — tap to interrupt"
       className={classes}
+      style={bottomPx === undefined ? undefined : { bottom: bottomPx }}
     >
       {/* Mic-with-strikethrough icon. ~14px. */}
       <svg
