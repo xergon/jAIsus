@@ -64,7 +64,6 @@ function clean(value: string | null, maxLen: number): string {
     // already decoded, or garbled — use raw input
   }
   // strip ASCII control chars (incl. NUL, BEL, etc.) but keep printable Unicode
-  // eslint-disable-next-line no-control-regex
   s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
   // collapse runs of whitespace to a single space
   s = s.replace(/\s+/g, ' ').trim();
@@ -225,7 +224,11 @@ function cardFrame(body: ReactElement): ReactElement {
 
 // ---------- variants ----------
 
-function defaultCard(): ReactElement {
+/**
+ * `dove: false` drops the emoji: Satori fetches emoji images from a CDN, so
+ * the error fallback renders without it and survives a CDN outage.
+ */
+function defaultCard({ dove = true }: { dove?: boolean } = {}): ReactElement {
   const body = createElement(
     'div',
     {
@@ -241,19 +244,21 @@ function defaultCard(): ReactElement {
       },
     },
     // dove emoji, top-right of content area
-    createElement(
-      'div',
-      {
-        style: {
-          position: 'absolute',
-          top: 0,
-          right: 0,
-          fontSize: 80,
-          display: 'flex',
-        },
-      },
-      '\u{1F54A}\u{FE0F}'
-    ),
+    dove
+      ? createElement(
+          'div',
+          {
+            style: {
+              position: 'absolute',
+              top: 0,
+              right: 0,
+              fontSize: 80,
+              display: 'flex',
+            },
+          },
+          '\u{1F54A}\u{FE0F}'
+        )
+      : null,
     createElement(
       'div',
       {
@@ -435,6 +440,27 @@ const CACHE_HEADERS = {
     'public, max-age=3600, s-maxage=86400',
 } as const;
 
+/**
+ * Render to a buffered PNG response. ImageResponse renders lazily inside its
+ * body stream, so a Satori/font/emoji failure used to surface only after a
+ * 200 (with a long cache lifetime) had gone out: a broken image, no log, and
+ * a catch block that could never run. Draining the body here makes a render
+ * failure reject inside the caller's try. A card PNG is ~100 KB.
+ */
+async function renderPng(element: ReactElement, cacheControl: string): Promise<Response> {
+  const image = new ImageResponse(element, {
+    ...size,
+    headers: { 'Cache-Control': cacheControl },
+  });
+  const png = await image.arrayBuffer();
+  // image.headers carries content-type image/png and the Cache-Control above.
+  return new Response(png, { status: 200, headers: image.headers });
+}
+
+// The error fallback is cached briefly so a verse/message URL isn't pinned
+// to the generic card for a day after a transient failure.
+const FALLBACK_CACHE_CONTROL = 'public, max-age=300, s-maxage=600';
+
 export async function GET(req: Request): Promise<Response> {
   // Audit fix: edge runtime is per-isolate, so in-memory rateLimit() doesn't
   // persist effectively across requests. Use the Upstash-backed async variant
@@ -464,26 +490,26 @@ export async function GET(req: Request): Promise<Response> {
       element = defaultCard();
     }
 
-    return new ImageResponse(element, {
-      ...size,
-      headers: { ...CACHE_HEADERS },
-    });
+    // `await` matters: without it a rejected render skips this try/catch.
+    return await renderPng(element, CACHE_HEADERS['Cache-Control']);
   } catch (err) {
     // Last-ditch fallback — if rendering fails for any reason, return the
-    // default card so crawlers still get a usable image. If even that fails,
-    // surface a 500 with a short message.
+    // default card (without the CDN-fetched emoji) so crawlers still get a
+    // usable image. If even that fails, surface a 500 with a short message.
+    console.error('[og] render failed', err);
     try {
-      return new ImageResponse(defaultCard(), {
-        ...size,
-        headers: { ...CACHE_HEADERS },
-      });
-    } catch {
+      return await renderPng(defaultCard({ dove: false }), FALLBACK_CACHE_CONTROL);
+    } catch (fallbackErr) {
+      console.error('[og] fallback render failed', fallbackErr);
       // Audit fix: never echo the original error message back to the
       // caller. On edge runtime, err.message can include upstream font
       // paths, library internals, or other deployment-fingerprint detail
       // that's pointless for the requester and useful only to attackers.
-      // The detailed error is already logged via the outer catch.
-      return new Response('OG image generation failed', { status: 500 });
+      // no-store so the CDN never caches the failure.
+      return new Response('OG image generation failed', {
+        status: 500,
+        headers: { 'Cache-Control': 'no-store' },
+      });
     }
   }
 }

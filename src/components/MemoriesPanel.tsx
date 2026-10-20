@@ -50,17 +50,25 @@ export function MemoriesPanel({ isOpen, onClose }: MemoriesPanelProps) {
   const [confirmingClear, setConfirmingClear] = useState(false);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Pin "now" so relative times don't churn on every render. Refreshed when
-  // the panel opens (good enough — drawer is short-lived).
+  // Pin "now" so relative times don't churn on every render. Refreshed on the
+  // first frame after the panel opens (good enough — drawer is short-lived).
   const [now, setNow] = useState<number>(() => Date.now());
   useEffect(() => {
-    if (isOpen) setNow(Date.now());
+    if (!isOpen) return;
+    const raf = requestAnimationFrame(() => setNow(Date.now()));
+    return () => cancelAnimationFrame(raf);
   }, [isOpen]);
 
-  // When closing, reset transient UI so re-opening is clean.
+  // When closing, reset transient UI so re-opening is clean. Adjusted during
+  // render (React's "store info from previous renders" pattern); the timer
+  // is cleared in the effect below.
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen);
+    if (!isOpen) setConfirmingClear(false);
+  }
   useEffect(() => {
     if (isOpen) return;
-    setConfirmingClear(false);
     if (confirmTimerRef.current) {
       clearTimeout(confirmTimerRef.current);
       confirmTimerRef.current = null;
@@ -134,24 +142,50 @@ export function MemoriesPanel({ isOpen, onClose }: MemoriesPanelProps) {
           >
             Memories ({memories.length})
           </h2>
-          {memories.length > 0 && (
+          {/* Close comes first in DOM order: it gets focus on open (not the
+              destructive Clear all), and touch screen-reader users, who
+              can't reach the aria-hidden backdrop or press Escape, get a way
+              out — with no memories it is the only control in the sheet. */}
+          <div className="flex flex-row-reverse items-center gap-2">
             <button
               type="button"
-              onClick={handleClearClick}
-              aria-label={
-                confirmingClear
-                  ? 'Confirm clear all memories'
-                  : 'Clear all memories'
-              }
-              className={`text-xs ${
-                confirmingClear
-                  ? 'text-rose-700 font-semibold'
-                  : 'text-rose-600 hover:underline'
-              } active:scale-[0.98] transition-transform`}
+              onClick={onClose}
+              aria-label="Close memories"
+              className="w-11 h-11 -mr-2 flex items-center justify-center rounded-full text-stone-500 hover:bg-stone-100 active:scale-95 transition-transform"
             >
-              {confirmingClear ? 'Sure? Tap again to confirm' : 'Clear all'}
+              <svg
+                className="w-5 h-5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M18 6L6 18" />
+                <path d="M6 6l12 12" />
+              </svg>
             </button>
-          )}
+            {memories.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearClick}
+                aria-label={
+                  confirmingClear
+                    ? 'Confirm clear all memories'
+                    : 'Clear all memories'
+                }
+                className={`text-xs ${
+                  confirmingClear
+                    ? 'text-rose-700 font-semibold'
+                    : 'text-rose-600 hover:underline'
+                } active:scale-[0.98] transition-transform`}
+              >
+                {confirmingClear ? 'Sure? Tap again to confirm' : 'Clear all'}
+              </button>
+            )}
+          </div>
         </div>
 
         <p className="px-4 text-xs text-stone-500 mt-1 pb-2">

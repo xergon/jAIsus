@@ -5,6 +5,7 @@ import { useFavorites } from '@/hooks/useFavorites';
 import { useModalA11y } from '@/hooks/useModalA11y';
 import { clearFavorites, removeFavorite, type Favorite } from '@/lib/favorites';
 import { EmptyState } from '@/components/EmptyState';
+import { toast } from '@/lib/toast';
 
 interface FavoritesPanelProps {
   isOpen: boolean;
@@ -14,6 +15,16 @@ interface FavoritesPanelProps {
 }
 
 const TRUNCATE_THRESHOLD = 200;
+
+/** Collapsed preview: cut at a word near the threshold, and never between
+ *  the two halves of an emoji (a lone surrogate renders as '�'). */
+function truncate(s: string): string {
+  const space = s.lastIndexOf(' ', TRUNCATE_THRESHOLD);
+  let cut = space > TRUNCATE_THRESHOLD * 0.6 ? space : TRUNCATE_THRESHOLD;
+  const c = s.charCodeAt(cut - 1);
+  if (c >= 0xd800 && c <= 0xdbff) cut -= 1;
+  return `${s.slice(0, cut).trimEnd()}…`;
+}
 
 const KIND_CHIP_CLASSES: Record<Favorite['kind'], string> = {
   message: 'bg-rose-100 text-rose-700',
@@ -72,18 +83,28 @@ export function FavoritesPanel({
   const [confirmingClear, setConfirmingClear] = useState(false);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Pin "now" so relative times don't churn on every render. Refreshed when
-  // the panel opens (good enough — drawer is short-lived).
+  // Pin "now" so relative times don't churn on every render. Refreshed on the
+  // first frame after the panel opens (good enough — drawer is short-lived).
   const [now, setNow] = useState<number>(() => Date.now());
   useEffect(() => {
-    if (isOpen) setNow(Date.now());
+    if (!isOpen) return;
+    const raf = requestAnimationFrame(() => setNow(Date.now()));
+    return () => cancelAnimationFrame(raf);
   }, [isOpen]);
 
-  // When closing, reset transient UI so re-opening is clean.
+  // When closing, reset transient UI so re-opening is clean. Adjusted during
+  // render (React's "store info from previous renders" pattern); the timer
+  // is cleared in the effect below.
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen);
+    if (!isOpen) {
+      setExpandedIds(new Set());
+      setConfirmingClear(false);
+    }
+  }
   useEffect(() => {
     if (isOpen) return;
-    setExpandedIds(new Set());
-    setConfirmingClear(false);
     if (confirmTimerRef.current) {
       clearTimeout(confirmTimerRef.current);
       confirmTimerRef.current = null;
@@ -172,24 +193,49 @@ export function FavoritesPanel({
           >
             Saved ({favorites.length})
           </h2>
-          {favorites.length > 0 && (
+          {/* Close comes first in DOM order: it gets focus on open (not the
+              destructive Clear all), and touch screen-reader users, who
+              can't reach the aria-hidden backdrop or press Escape, get a way out. */}
+          <div className="flex flex-row-reverse items-center gap-2">
             <button
               type="button"
-              onClick={handleClearClick}
-              aria-label={
-                confirmingClear
-                  ? 'Confirm clear all favorites'
-                  : 'Clear all favorites'
-              }
-              className={`text-xs ${
-                confirmingClear
-                  ? 'text-rose-700 font-semibold'
-                  : 'text-rose-600 hover:underline'
-              } active:scale-[0.98] transition-transform`}
+              onClick={onClose}
+              aria-label="Close saved favorites"
+              className="w-11 h-11 -mr-2 flex items-center justify-center rounded-full text-stone-500 hover:bg-stone-100 active:scale-95 transition-transform"
             >
-              {confirmingClear ? 'Sure? Tap again to confirm' : 'Clear all'}
+              <svg
+                className="w-5 h-5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M18 6L6 18" />
+                <path d="M6 6l12 12" />
+              </svg>
             </button>
-          )}
+            {favorites.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearClick}
+                aria-label={
+                  confirmingClear
+                    ? 'Confirm clear all favorites'
+                    : 'Clear all favorites'
+                }
+                className={`text-xs ${
+                  confirmingClear
+                    ? 'text-rose-700 font-semibold'
+                    : 'text-rose-600 hover:underline'
+                } active:scale-[0.98] transition-transform`}
+              >
+                {confirmingClear ? 'Sure? Tap again to confirm' : 'Clear all'}
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="overflow-y-auto px-4 pb-6 max-h-[65vh] modal-scroll">
@@ -205,9 +251,7 @@ export function FavoritesPanel({
                 const isExpanded = expandedIds.has(fav.id);
                 const isLong = fav.content.length > TRUNCATE_THRESHOLD;
                 const displayedContent =
-                  isLong && !isExpanded
-                    ? `${fav.content.slice(0, TRUNCATE_THRESHOLD).trimEnd()}…`
-                    : fav.content;
+                  isLong && !isExpanded ? truncate(fav.content) : fav.content;
 
                 return (
                   <li
@@ -261,7 +305,11 @@ export function FavoritesPanel({
                       <div className="flex flex-col items-center gap-1 shrink-0">
                         <button
                           type="button"
-                          onClick={() => removeFavorite(fav.id)}
+                          onClick={() => {
+                            if (!removeFavorite(fav.id)) {
+                              toast.error("Couldn't remove it — storage unavailable");
+                            }
+                          }}
                           aria-label="Remove from favorites"
                           className="w-11 h-11 flex items-center justify-center rounded-full text-stone-500 hover:text-rose-600 hover:bg-rose-50 active:scale-[0.95] transition-all"
                         >

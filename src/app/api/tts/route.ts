@@ -8,6 +8,14 @@ export const maxDuration = 30;
 // so legitimate use can spike, but anything beyond is abuse.
 const TTS_LIMIT = { capacity: 60, refillRatePerSec: 2 };
 
+// ElevenLabs bills per character, and the request limit alone still let one
+// IP send 60 x 1500 characters at once and ~3000/s after that. This second
+// bucket meters characters: 6000 at once, 100/s after (speech plays at
+// ~15/s per listener and the app fetches at most one chunk ahead, so this
+// leaves room for several people behind one shared IP). Over the limit the
+// client reads the rest of that reply with the browser voice.
+const TTS_CHAR_LIMIT = { capacity: 6000, refillRatePerSec: 100 };
+
 // Hard ceiling on per-request text. ElevenLabs charges per character, so
 // truncating uninvited 100kb dumps prevents a single curl from draining budget.
 const MAX_TTS_TEXT_LENGTH = 1500;
@@ -35,9 +43,12 @@ export async function POST(req: Request) {
   }
 
   // Cap length to avoid budget drain. Truncate silently — the caller is the
-  // app's own useSpeechSynthesis hook which already slices to 2000 chars; this
-  // is a server-side safety net.
+  // app's own useSpeechSynthesis hook, which sends a sentence or a chunk of
+  // ~220 characters at a time; this is a server-side safety net.
   const text = body.text.slice(0, MAX_TTS_TEXT_LENGTH);
+
+  const charRl = rateLimit(`tts-chars:${clientKey(req)}`, TTS_CHAR_LIMIT, text.length);
+  if (!charRl.ok) return rateLimitResponse(charRl);
 
   // Validate voice ID — only allow known voices
   const validIds = VOICE_OPTIONS.map(v => v.id) as readonly string[];

@@ -27,14 +27,19 @@ export function PrayerRequestForm({ isOpen, onClose }: PrayerRequestFormProps) {
     };
   }, []);
 
-  // Reset submitted state when modal is closed and reopened
+  // Reset submitted state when modal is closed and reopened. Adjusted during
+  // render (React's "store info from previous renders" pattern); the pending
+  // close timer is cleared in the effect below.
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen);
+    if (!isOpen) setSubmitted(false);
+  }
   useEffect(() => {
-    if (!isOpen) {
-      if (closeTimeoutRef.current) {
-        clearTimeout(closeTimeoutRef.current);
-        closeTimeoutRef.current = null;
-      }
-      setSubmitted(false);
+    if (isOpen) return;
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
     }
   }, [isOpen]);
 

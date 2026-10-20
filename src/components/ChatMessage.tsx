@@ -2,12 +2,12 @@
 
 import { memo, useMemo, useState } from 'react';
 import type { UIMessage } from 'ai';
-import { stripAllEmotionTags } from '@/lib/emotions';
+import { stripAllEmotionTags, stripTrailingEmotionTag } from '@/lib/emotions';
 import { FavoriteButton } from './FavoriteButton';
 import { ShareButton } from './ShareButton';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { useLongPress } from '@/hooks/useLongPress';
-import { toggleFavorite, favoriteId, isFavorite } from '@/lib/favorites';
+import { toggleFavoriteResult, favoriteId, isFavorite } from '@/lib/favorites';
 import { toast } from '@/lib/toast';
 import { parables } from '@/lib/parables';
 
@@ -20,26 +20,32 @@ interface ChatMessageProps {
 
 /**
  * Drops an [EMOTION:...] tag that is still arriving at the end of a streamed
- * reply ("My child. [EMOTION:wa"); stripAllEmotionTags only removes whole tags.
+ * reply ("My child. [EMOTION:wa"). stripAllEmotionTags now does this itself;
+ * kept as an export for existing callers.
  */
 export function stripPartialEmotionTag(text: string): string {
-  return text.replace(/\[(?:E(?:M(?:O(?:T(?:I(?:O(?:N(?::\s*\w*\s*)?)?)?)?)?)?)?)?$/i, '');
+  return stripTrailingEmotionTag(text);
 }
 
 // Known parable names as they follow "Parable of the": "Mustard Seed", ...
+// Longest first, so a name that starts with a shorter one wins.
 const PARABLE_NAMES = parables
   .filter(p => p.title.startsWith('The '))
-  .map(p => p.title.slice(4));
+  .map(p => p.title.slice(4))
+  .sort((a, b) => b.length - a.length);
 
 /** "Parable of the Sower" for a reply that mentions one, else null. */
 function parableLabel(text: string): string | null {
-  const match = text.match(/parable of the ([^.!?,;:\n"“”*()]+)/i);
+  // Dashes end the name too: "the talents—the servant who…".
+  const match = text.match(/parable of the ([^.!?,;:\n"“”*()—–]+)/i);
   if (!match) return null;
   const rest = match[1].trim();
   const lower = rest.toLowerCase();
+  // A known name followed by anything but a letter: "prodigal son's" and
+  // "talents-" match, "net" does not match "network".
   const known = PARABLE_NAMES.find(name => {
     const n = name.toLowerCase();
-    return lower === n || lower.startsWith(n + ' ');
+    return lower.startsWith(n) && !/^[\p{L}\p{N}]/u.test(lower.slice(n.length));
   });
   // An unknown one: its first few words, not the rest of the sentence.
   const name = known ?? rest.split(/\s+/).slice(0, 3).join(' ');
@@ -58,7 +64,8 @@ function ChatMessageImpl({ message, hidden = false, isStreaming = false }: ChatM
     .join('');
 
   // Strip all per-sentence emotion tags from assistant messages
-  const textContent = !isUser ? stripPartialEmotionTag(stripAllEmotionTags(rawText).cleanText) : rawText;
+  // (also drops a half-streamed tag at the end).
+  const textContent = !isUser ? stripAllEmotionTags(rawText).cleanText : rawText;
 
   // Detect parable context references
   const contextLabel = parableLabel(textContent);
@@ -132,12 +139,14 @@ function ChatMessageImpl({ message, hidden = false, isStreaming = false }: ChatM
     };
 
     const handleToggleSave = () => {
-      const result = toggleFavorite({
+      const { status } = toggleFavoriteResult({
         kind: 'message',
         content: textContent,
         context: contextLabel ?? undefined,
       });
-      if (result) {
+      if (status === 'failed') {
+        toast.error("Couldn't save — storage unavailable");
+      } else if (status === 'added') {
         toast.success('Saved to favorites');
       } else {
         toast('Removed from favorites');

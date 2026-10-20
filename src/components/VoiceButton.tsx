@@ -14,6 +14,9 @@ export function VoiceButton({ voiceState, onStart, onStop, isSupported }: VoiceB
   const isActive = voiceState === 'listening';
   const isBusy = voiceState === 'processing' || voiceState === 'speaking';
   const { vibrate } = useHaptics();
+  // Without speech recognition only listening is impossible: stopping a
+  // reply or cancelling a question still has to work.
+  const disabled = !isSupported && !isActive && !isBusy;
 
   const baseClasses = 'relative flex items-center justify-center w-14 h-14 rounded-full transition-all duration-200 active:scale-95 shadow-lg';
   const stateClasses = isActive
@@ -21,7 +24,7 @@ export function VoiceButton({ voiceState, onStart, onStop, isSupported }: VoiceB
     : isBusy
       ? 'bg-amber-500 text-white shadow-amber-200'
       : 'bg-teal-500 text-white shadow-teal-200 hover:bg-teal-600';
-  const disabledClasses = !isSupported ? 'opacity-50 cursor-not-allowed' : '';
+  const disabledClasses = disabled ? 'opacity-50 cursor-not-allowed' : '';
 
   function handleClick() {
     // Tactile confirmation — heavier when starting/stopping a session,
@@ -37,9 +40,10 @@ export function VoiceButton({ voiceState, onStart, onStop, isSupported }: VoiceB
       // otherwise "click" it and turn the mic on.
       type="button"
       onClick={handleClick}
-      disabled={!isSupported}
+      disabled={disabled}
       className={`${baseClasses} ${stateClasses} ${disabledClasses}`}
-      aria-label={isActive ? 'Stop listening' : isBusy ? 'Stop speaking' : 'Start listening'}
+      // While thinking, a tap cancels the question (see handleVoiceToggle).
+      aria-label={isActive ? 'Stop listening' : voiceState === 'processing' ? 'Cancel question' : isBusy ? 'Stop speaking' : 'Start listening'}
       suppressHydrationWarning
     >
       {isActive ? (

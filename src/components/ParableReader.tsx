@@ -17,8 +17,6 @@ interface ParableReaderProps {
   onAskAbout?: (prompt: string) => void;
 }
 
-const ENTER_MS = 250;
-
 /**
  * Read `prefers-reduced-motion: reduce` once on the client.
  * Falls back to false during SSR — we always animate by default, and the
@@ -61,29 +59,29 @@ export function ParableReader({
   // is short-lived.
   const [reducedMotion] = useState<boolean>(readReducedMotion);
 
-  // `entered` controls the slide transform. Starts false on every new parable
-  // and flips to true on the next animation frame so the CSS transition runs.
-  // With reduced motion we skip the transition entirely (start at true).
+  // `entered` controls the slide transform (250ms, see `duration-[250ms]`).
+  // Starts false on every new parable and flips to true on the next animation
+  // frame so the CSS transition runs. With reduced motion we skip the
+  // transition entirely (start at true).
   const [entered, setEntered] = useState<boolean>(reducedMotion);
+  // Back to the off-screen state whenever the parable changes (or closes) so
+  // the next open animates in cleanly. Adjusted during render (React's "store
+  // info from previous renders" pattern) rather than in the effect below.
+  const [shownParable, setShownParable] = useState(parable);
+  if (parable !== shownParable) {
+    setShownParable(parable);
+    setEntered(reducedMotion);
+  }
 
   // Track the parable that's currently being shown so we know when it changes
   // (and can stop any in-flight TTS). Using the id is enough — referential
   // equality on the object isn't guaranteed across re-renders.
   const currentIdRef = useRef<string | null>(null);
 
-  // --- mount/unmount + slide-in animation ---
+  // --- slide-in animation: off-screen (above), then on the next frame flip
+  // to entered ---
   useEffect(() => {
-    if (!parable) {
-      // Reset to off-screen state so the next open animates in cleanly.
-      setEntered(reducedMotion);
-      return;
-    }
-    if (reducedMotion) {
-      setEntered(true);
-      return;
-    }
-    // Start off-screen, then on the next frame flip to entered.
-    setEntered(false);
+    if (!parable || reducedMotion) return;
     const raf = requestAnimationFrame(() => setEntered(true));
     return () => cancelAnimationFrame(raf);
   }, [parable, reducedMotion]);

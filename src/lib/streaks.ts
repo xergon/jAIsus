@@ -133,12 +133,29 @@ export function getStreakState(): StreakState {
 }
 
 /**
+ * Whether the stored streak is still running on `now`: last active today or
+ * yesterday (or up to two days ahead, after flying west). Older means a day
+ * was missed, so the stored `current` is already broken; the next
+ * recordActivity will restart it at 1.
+ */
+export function isStreakActive(state: StreakState, now: Date = new Date()): boolean {
+  if (state.current <= 0 || !state.lastActive) return false;
+  const last = parseDateKey(state.lastActive);
+  const today = parseDateKey(dateKey(now));
+  if (!last || !today) return false;
+  const gap = daysBetween(last, today);
+  return gap >= -2 && gap <= 1;
+}
+
+/**
  * Record a use of the app. Idempotent within a single calendar day.
  *
  * Logic:
  *  - If lastActive is today: no change.
+ *  - If lastActive is 1–2 days AHEAD of today (the user flew west across the
+ *    date line): no change, the streak and lastActive stay as they are.
  *  - If lastActive was yesterday: current += 1, longest = max(longest, current), totalDays += 1.
- *  - If lastActive was older OR null: current = 1, totalDays += 1.
+ *  - If lastActive was older, further ahead (a wrong clock) OR null: current = 1, totalDays += 1.
  *  - In all "new day" cases, lastActive becomes today.
  *
  * Returns the updated state. Dispatches a 'jaisus-streak-changed' CustomEvent
@@ -164,13 +181,22 @@ export function recordActivity(now?: Date): StreakState {
     }
   }
 
+  // The local date went back a day or two: a timezone change (Tokyo → Los
+  // Angeles), not a missed day. Local dates can be up to two days apart
+  // (UTC+14 vs UTC-12). Keep the streak; don't move lastActive back or count
+  // a day twice, and emit nothing.
+  if (gap < 0 && gap >= -2) {
+    return prev;
+  }
+
   let nextCurrent: number;
   if (gap === 1) {
     // Yesterday → extend the streak.
     nextCurrent = prev.current + 1;
   } else {
-    // First-ever use, missed a day, or some weird non-positive gap (e.g.
-    // user rolled their clock back). Treat as a fresh streak starting today.
+    // First-ever use, missed a day, or lastActive more than two days ahead
+    // (the clock was wrong and got corrected). Treat as a fresh streak
+    // starting today.
     nextCurrent = 1;
   }
 

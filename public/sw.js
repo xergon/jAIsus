@@ -279,11 +279,16 @@ self.addEventListener('message', (event) => {
 //     like `icon`, `actions`, `image` — those could be abused if VAPID leaks).
 //   - Force `url` to a same-origin pathname; cross-origin opens are dropped
 //     to '/'. This is the open-redirect guard.
+//   - Cap the body at 300 (PUSH_BODY_MAX in /api/push/send-daily — keep the
+//     two in sync). An over-long body is shortened, not swapped for the
+//     generic text: that used to hide a long verse entirely.
 function sanitizePushPayload(raw) {
   const out = { title: 'jAIsus', body: 'A new verse for today.', url: '/' };
   if (raw && typeof raw === 'object') {
     if (typeof raw.title === 'string' && raw.title.length <= 80) out.title = raw.title;
-    if (typeof raw.body === 'string' && raw.body.length <= 300) out.body = raw.body;
+    if (typeof raw.body === 'string' && raw.body.length > 0) {
+      out.body = raw.body.length <= 300 ? raw.body : raw.body.slice(0, 299) + '…';
+    }
     if (typeof raw.url === 'string') {
       try {
         const parsed = new URL(raw.url, self.location.origin);
@@ -304,12 +309,19 @@ self.addEventListener('push', (event) => {
   }
   const payload = sanitizePushPayload(raw);
   event.waitUntil(
+    // No `badge`: Android draws the badge from its alpha channel only, and
+    // the full-colour, mostly opaque app icon came out as a white blob.
+    // Without one Chrome uses its own monochrome icon. A dedicated
+    // white-on-transparent PNG could go here later.
     self.registration.showNotification(payload.title, {
       body: payload.body,
       icon: '/icon-192.png',
-      badge: '/icon-192.png',
       data: { url: payload.url },
-      tag: 'daily-verse', // collapses duplicates if multiple arrive same day
+      tag: 'daily-verse', // one entry in the tray: today's verse replaces yesterday's
+      // ...and still alerts. Without this the replacement was silent, so
+      // after day one the verse never sounded or showed a banner again.
+      // (Chromium only; needs the non-empty tag above.)
+      renotify: true,
     })
   );
 });
@@ -339,16 +351,62 @@ self.addEventListener('notificationclick', (event) => {
           // dropped the notification's URL on the floor. Now navigate the
           // focused client to the requested path (same-origin already verified
           // above; client.navigate enforces same-origin again).
+          // Compare without VersionCheck's `_v` cache-buster (client.url may
+          // not reflect its replaceState), and only navigate when the page
+          // really differs: navigating reloads the app, cutting off a reply
+          // mid-stream and any half-typed message.
           try {
             const clientUrl = new URL(client.url, self.location.origin);
-            if (clientUrl.pathname + clientUrl.search !== url && typeof client.navigate === 'function') {
+            const target = new URL(url, self.location.origin);
+            clientUrl.searchParams.delete('_v');
+            target.searchParams.delete('_v');
+            const differs =
+              clientUrl.pathname !== target.pathname ||
+              (target.search !== '' && clientUrl.search !== target.search);
+            if (differs && typeof client.navigate === 'function') {
               await client.navigate(url);
             }
-          } catch { /* keep focused tab as-is on URL parse failure */ }
+          } catch { /* keep focused tab as-is on URL parse failure or uncontrolled client */ }
           return;
         }
       }
       if (self.clients.openWindow) await self.clients.openWindow(url);
     })()
   );
+});
+
+// --- pushsubscriptionchange: re-register a rotated subscription ---------------
+// Browsers (notably Firefox) can expire or rotate a subscription. Without this
+// the server keeps the dead endpoint (the cron then gets 410 and drops it) and
+// never learns the new one. The page also re-syncs on load (push-client's
+// syncExistingSubscription) for browsers that don't fire this event.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil((async () => {
+    try {
+      const oldSub = event.oldSubscription || null;
+      let newSub = event.newSubscription || null;
+      if (!newSub) {
+        const key = oldSub && oldSub.options && oldSub.options.applicationServerKey;
+        if (!key) return; // can't resubscribe here; the page-load resync covers it
+        newSub = await self.registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: key,
+        });
+      }
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: newSub.toJSON() }),
+      });
+      if (oldSub && oldSub.endpoint && oldSub.endpoint !== newSub.endpoint) {
+        await fetch('/api/push/unsubscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: oldSub.endpoint }),
+        });
+      }
+    } catch {
+      // Best effort — the SW must not throw; the page-load resync retries.
+    }
+  })());
 });

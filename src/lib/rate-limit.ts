@@ -71,12 +71,14 @@ export interface RateLimitResult {
 }
 
 /**
- * Attempt to consume one token for `key` (typically an IP).
+ * Attempt to consume `cost` tokens (default 1) for `key` (typically an IP).
+ * A cost above 1 meters something other than requests, e.g. the characters
+ * a TTS request bills; keep `cost` <= `capacity` or it can never pass.
  *
  * Returns `{ ok: true }` if the request can proceed, or `{ ok: false, retryAfterSec }`
  * if the bucket is empty.
  */
-export function rateLimit(key: string, config: RateLimitConfig): RateLimitResult {
+export function rateLimit(key: string, config: RateLimitConfig, cost = 1): RateLimitResult {
   ensureCleanup();
   const now = Date.now();
   let bucket = buckets.get(key);
@@ -90,12 +92,12 @@ export function rateLimit(key: string, config: RateLimitConfig): RateLimitResult
   bucket.tokens = Math.min(config.capacity, bucket.tokens + elapsed * config.refillRatePerSec);
   bucket.lastRefill = now;
 
-  if (bucket.tokens < 1) {
-    const retryAfterSec = Math.ceil((1 - bucket.tokens) / config.refillRatePerSec);
+  if (bucket.tokens < cost) {
+    const retryAfterSec = Math.ceil((cost - bucket.tokens) / config.refillRatePerSec);
     return { ok: false, retryAfterSec, remaining: 0 };
   }
 
-  bucket.tokens -= 1;
+  bucket.tokens -= cost;
   return { ok: true, retryAfterSec: 0, remaining: Math.floor(bucket.tokens) };
 }
 

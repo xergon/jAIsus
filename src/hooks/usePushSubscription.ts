@@ -5,6 +5,9 @@
  *
  * On mount: detects support, reads current permission, and probes for an
  * existing PushSubscription. Re-renders the caller as those values resolve.
+ * Also re-sends an existing subscription to the server (throttled; see
+ * syncExistingSubscription) — NotificationOptInPrompt, and so this hook, is
+ * mounted for the whole app session, so this runs once per app load.
  *
  * subscribe()/unsubscribe() are stable callbacks that update local state and
  * return the result so callers can react (e.g., dismiss a modal on success).
@@ -16,6 +19,7 @@ import {
   getPermissionState,
   isPushSupported,
   requestPermissionAndSubscribe,
+  syncExistingSubscription,
   unsubscribe as unsubscribeLib,
   type SubscribeResult,
 } from '@/lib/push-client';
@@ -53,17 +57,19 @@ export function usePushSubscription(): UsePushSubscriptionState {
   }, []);
 
   // Initial probe — runs once after hydration so we don't desync SSR HTML.
+  // State is set from the async probe (not synchronously in the effect body).
   useEffect(() => {
     let cancelled = false;
-    const supported = isPushSupported();
-    setIsSupported(supported);
-    setPermission(getPermissionState());
-
-    if (!supported) return;
 
     (async () => {
+      const supported = isPushSupported();
+      setIsSupported(supported);
+      setPermission(getPermissionState());
+      if (!supported) return;
       const sub = await getCurrentSubscription();
       if (!cancelled) setSubscription(sub);
+      // A first POST that failed, or a store that lost it, heals here.
+      if (sub) void syncExistingSubscription();
     })();
 
     return () => {

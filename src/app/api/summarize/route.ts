@@ -67,11 +67,14 @@ function formatMessages(messages: IncomingMessage[]): string {
 
 /**
  * Truncate from the FRONT so the most recent context survives — the end of
- * a conversation is the most relevant part for a summary.
+ * a conversation is the most relevant part for a summary. Lone surrogates
+ * become U+FFFD.
  */
 function truncateTail(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  return text.slice(text.length - maxChars);
+  // toWellFormed: the cut can land inside an emoji, and Anthropic rejects a
+  // lone surrogate with a 400 — which used to lose the summary silently.
+  if (text.length <= maxChars) return text.toWellFormed();
+  return text.slice(text.length - maxChars).toWellFormed();
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

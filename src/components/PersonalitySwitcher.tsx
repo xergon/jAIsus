@@ -178,7 +178,6 @@ export function PersonalitySwitcher({
             type="button"
             role="radio"
             aria-checked={isActive}
-            aria-pressed={isActive}
             aria-label={`${p.name} — ${p.desc}`}
             tabIndex={i === focusableIndex ? 0 : -1}
             onClick={() => selectByIndex(i)}

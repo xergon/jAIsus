@@ -17,15 +17,15 @@ export type Emotion =
 
 /** Map each emotion to its preferred video file(s), in priority order. */
 export const EMOTION_VIDEO_MAP: Record<Emotion, string[]> = {
-  love:          ['/jaisus-embraces.mp4', '/jaisus-loves-you.mp4'],
-  warmth:        ['/jaisus-loves-you.mp4', '/jaisus-embraces.mp4'],
-  prayer:        ['/jaisus-prays.mp4'],
-  anger:         ['/jAisus-angry.mp4'],
-  sadness:       ['/jAisus-suffers.mp4', '/jaisus-prays.mp4'],
-  disapproval:   ['/jAisus-shakinghead.mp4'],
-  encouragement: ['/jAisus_thumps_up.mp4', '/jaisus-loves-you.mp4'],
-  wonder:        ['/jaisus-prays.mp4', '/jaisus-loves-you.mp4'],
-  neutral:       ['/jaisus-loves-you.mp4', '/jaisus-prays.mp4'],
+  love:          ['/jaisus-embraces-1080.mp4', '/jaisus-loves-you-1080.mp4'],
+  warmth:        ['/jaisus-loves-you-1080.mp4', '/jaisus-embraces-1080.mp4'],
+  prayer:        ['/jaisus-prays-1080.mp4'],
+  anger:         ['/jAisus-angry-1080.mp4'],
+  sadness:       ['/jAisus-suffers-1080.mp4', '/jaisus-prays-1080.mp4'],
+  disapproval:   ['/jAisus-shakinghead-1080.mp4'],
+  encouragement: ['/jAisus_thumps_up-1080.mp4', '/jaisus-loves-you-1080.mp4'],
+  wonder:        ['/jaisus-prays-1080.mp4', '/jaisus-loves-you-1080.mp4'],
+  neutral:       ['/jaisus-loves-you-1080.mp4', '/jaisus-prays-1080.mp4'],
 };
 
 /**
@@ -84,17 +84,33 @@ export function parseEmotionTag(text: string): { emotion: Emotion; cleanText: st
 }
 
 /**
+ * Drops an [EMOTION:...] tag that is still arriving at the very end of the
+ * text ("My child. [EMOTION:wa"), or that was cut off by the token limit.
+ * Bounded to the same 40 characters as a whole tag, so a tag that is never
+ * closed shows up again instead of hiding the rest of the reply. Anchored at
+ * the end, so the text before it stays the same once the tag completes (the
+ * TTS sentence offsets in ChatInterface rely on that).
+ */
+export function stripTrailingEmotionTag(text: string): string {
+  return text.replace(/\[(?:E(?:M(?:O(?:T(?:I(?:O(?:N(?::[^\]\[\n]{0,40})?)?)?)?)?)?)?)?$/i, '');
+}
+
+/**
  * Strip ALL emotion tags from a full response (for display purposes).
  * Returns the clean text and the last emotion found.
  */
 export function stripAllEmotionTags(text: string): { lastEmotion: Emotion; cleanText: string } {
   let lastEmotion: Emotion = 'neutral';
-  const cleanText = text.replace(/\[EMOTION:\s*(\w+)\s*\]\s*/gi, (_match, tag: string) => {
-    const resolved = resolveEmotion(tag);
+  // Any tag text up to 40 chars ("warm-hearted", "righteous anger"), not just
+  // one \w word: those used to stay in the bubble and be spoken. Bounded, and
+  // never across a bracket or newline, so it can't swallow a later "[...]".
+  const cleanText = text.replace(/\[EMOTION:([^\]\[\n]{0,40})\]\s*/gi, (_match, tag: string) => {
+    const resolved =
+      resolveEmotion(tag) ?? resolveEmotion(tag.toLowerCase().split(/[^a-z]+/).find(Boolean) ?? '');
     if (resolved) {
       lastEmotion = resolved;
     }
     return '';
   });
-  return { lastEmotion, cleanText };
+  return { lastEmotion, cleanText: stripTrailingEmotionTag(cleanText) };
 }

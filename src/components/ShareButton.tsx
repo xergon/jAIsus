@@ -24,7 +24,7 @@ interface ShareButtonProps {
  * Compose the share text per content kind.
  *
  * Verses get quotation marks + attribution on one line.
- * Parables get a "From the {context}" preamble + a trimmed excerpt.
+ * Parables get a "From {context}" preamble + a trimmed excerpt.
  * Everything else uses the default footer-only format.
  */
 function composeShareText(
@@ -40,8 +40,9 @@ function composeShareText(
 
   if (kind === 'parable') {
     const excerpt = trimmed.length > 200 ? `${trimmed.slice(0, 200)}...` : trimmed;
-    const source = context ?? 'parables';
-    return `From the ${source}: "${excerpt}"\n\nvia jAIsus`;
+    // Contexts are titles like "The Good Samaritan" — no extra "the".
+    const source = context ?? 'the parables';
+    return `From ${source}: "${excerpt}"\n\nvia jAIsus`;
   }
 
   // 'message' | 'teaching' — default footer

@@ -15,6 +15,9 @@ import { track } from '@/lib/analytics';
 interface ExportButtonProps {
   /** Optional className applied to the trigger button */
   className?: string;
+  /** The chat as shown on screen. Without it the export reads the saved
+   *  copy, which keeps only the last 100 messages. */
+  messages?: ReadonlyArray<unknown>;
 }
 
 interface FormatOption {
@@ -63,7 +66,7 @@ function DownloadIcon(): JSX.Element {
  * Escape close it. First option is auto-focused on open, arrow keys move
  * focus between options.
  */
-export function ExportButton({ className }: ExportButtonProps): JSX.Element {
+export function ExportButton({ className, messages }: ExportButtonProps): JSX.Element {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -128,7 +131,7 @@ export function ExportButton({ className }: ExportButtonProps): JSX.Element {
       // Return focus to the trigger so screen readers announce where we are.
       triggerRef.current?.focus();
 
-      const ok = downloadExport({ format });
+      const ok = downloadExport({ format, messages });
       if (ok) {
         toast.success('Export ready — download starting');
         track('export.downloaded', { format });
@@ -136,7 +139,7 @@ export function ExportButton({ className }: ExportButtonProps): JSX.Element {
         toast.error('Could not export — please try again');
       }
     },
-    [close]
+    [close, messages]
   );
 
   // Roving focus via Arrow keys on the menu options.

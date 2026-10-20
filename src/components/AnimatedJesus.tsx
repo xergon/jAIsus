@@ -20,13 +20,13 @@ interface AnimatedJesusProps {
  */
 
 const VIDEO_PLAYLIST = [
-  '/jaisus-embraces.mp4',
-  '/jaisus-loves-you.mp4',
-  '/jaisus-prays.mp4',
-  '/jAisus-angry.mp4',
-  '/jAisus-suffers.mp4',
-  '/jAisus-shakinghead.mp4',
-  '/jAisus_thumps_up.mp4',
+  '/jaisus-embraces-1080.mp4',
+  '/jaisus-loves-you-1080.mp4',
+  '/jaisus-prays-1080.mp4',
+  '/jAisus-angry-1080.mp4',
+  '/jAisus-suffers-1080.mp4',
+  '/jAisus-shakinghead-1080.mp4',
+  '/jAisus_thumps_up-1080.mp4',
 ];
 
 // Stop playback at 7s16f (7.667s) out of 8s clips — last 8 frames skipped in playback.
@@ -49,10 +49,16 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
   const mountedRef = useRef(true);
   // Persistent emotion — every swap consults this to pick the next video
   const currentEmotionRef = useRef<Emotion>('neutral');
+  // Latest non-neutral emotion not yet shown. The emotion is only read at clip
+  // boundaries (~every 7.5s), and ChatInterface resets it to neutral as soon
+  // as speech ends — often before the next boundary, so the emotion clip was
+  // never picked. Consumed by the swap that plays it.
+  const pendingEmotionRef = useRef<Emotion | null>(null);
 
   // Keep the ref in sync with the prop
   useEffect(() => {
     currentEmotionRef.current = emotion;
+    if (emotion !== 'neutral') pendingEmotionRef.current = emotion;
   }, [emotion]);
 
   // Detect available videos on mount.
@@ -62,14 +68,14 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
   // the 7 probes were never released and could block real playback. Now we:
   //  1. Release each probe's src as soon as metadata fires (or errors).
   //  2. Track all probes so cleanup can release any still hanging.
-  //  3. Guard `done()`, the image probes, and the safety timeout against
-  //     calling setState on an unmounted component.
+  //  3. Guard `done()` and the safety timeout against calling setState on an
+  //     unmounted component.
   useEffect(() => {
     mountedRef.current = true;
     const found: string[] = [];
     let checked = 0;
+    let finalized = false;
     const probes: HTMLVideoElement[] = [];
-    const imageProbes: HTMLImageElement[] = [];
     let detectTimeout: ReturnType<typeof setTimeout> | null = null;
 
     function releaseProbe(v: HTMLVideoElement) {
@@ -84,33 +90,31 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
     }
 
     function done() {
-      if (!mountedRef.current) return;
+      if (finalized || !mountedRef.current) return;
+      finalized = true;
       if (found.length > 0) {
         const ordered = VIDEO_PLAYLIST.filter(v => found.includes(v));
         videosRef.current = ordered;
         setMode('video');
       } else {
-        const tryImages = ['/jesus-portrait.jpg', '/jesus-portrait.png'];
-        let tried = 0;
-        function tryNextImage() {
-          if (!mountedRef.current) return;
-          if (tried >= tryImages.length) { setMode('canvas'); setImageLoaded(true); return; }
-          const img = new Image();
-          imageProbes.push(img);
-          img.src = tryImages[tried];
-          img.onload = () => {
-            if (!mountedRef.current) return;
-            imageRef.current = img;
-            setMode('image');
-            setImageLoaded(true);
-          };
-          img.onerror = () => {
-            if (!mountedRef.current) return;
-            tried++;
-            tryNextImage();
-          };
-        }
-        tryNextImage();
+        // The portrait effect below loads the image (canvas if that fails too)
+        setMode('image');
+      }
+    }
+
+    // A clip whose metadata arrives after the 4s cutoff used to be dropped for
+    // the whole session (an anger reply then got the embrace clip, or no video
+    // at all). Add it now instead.
+    function addLateVideo(src: string) {
+      if (!mountedRef.current) return;
+      if (videosRef.current.length > 0) {
+        // Mutate in place: the playback engine holds this array. Appending
+        // keeps the clip indices it has stored valid.
+        videosRef.current.push(src);
+      } else {
+        // The cutoff found nothing and fell back to the portrait — switch to video
+        videosRef.current = [src];
+        setMode('video');
       }
     }
 
@@ -124,7 +128,8 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
         found.push(src);
         checked++;
         releaseProbe(v);
-        if (checked === VIDEO_PLAYLIST.length) done();
+        if (finalized) addLateVideo(src);
+        else if (checked === VIDEO_PLAYLIST.length) done();
       };
       v.onerror = () => {
         checked++;
@@ -133,25 +138,46 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
       };
     });
 
-    detectTimeout = setTimeout(() => {
-      if (checked < VIDEO_PLAYLIST.length) {
-        checked = VIDEO_PLAYLIST.length;
-        done();
-      }
-    }, 4000);
+    detectTimeout = setTimeout(done, 4000);
+    // Probes still silent after 30s are stuck — free their decoder slots
+    const giveUpTimeout = setTimeout(() => probes.forEach(releaseProbe), 30000);
 
     return () => {
       mountedRef.current = false;
       if (detectTimeout) clearTimeout(detectTimeout);
+      clearTimeout(giveUpTimeout);
       // Release any probes that haven't fired metadata yet
       probes.forEach(releaseProbe);
-      // Detach image probe handlers
-      imageProbes.forEach(img => {
-        img.onload = null;
-        img.onerror = null;
-      });
     };
   }, []);
+
+  // Portrait fallback: used when no clip is found, and when video fails at
+  // runtime (previously that went straight to the canvas with no Jesus).
+  // A mode change (e.g. a late clip switching to video) detaches the handlers,
+  // so a slow image load can't override it.
+  useEffect(() => {
+    if (mode !== 'image' || imageRef.current) return;
+    const tryImages = ['/jesus-portrait.jpg', '/jesus-portrait.png'];
+    let img: HTMLImageElement | null = null;
+    function tryNextImage(i: number) {
+      if (i >= tryImages.length) { setMode('canvas'); setImageLoaded(true); return; }
+      const probe = new Image();
+      img = probe;
+      probe.onload = () => {
+        imageRef.current = probe;
+        setImageLoaded(true);
+      };
+      probe.onerror = () => tryNextImage(i + 1);
+      probe.src = tryImages[i];
+    }
+    tryNextImage(0);
+    return () => {
+      if (img) {
+        img.onload = null;
+        img.onerror = null;
+      }
+    };
+  }, [mode]);
 
   // Video playback engine
   useEffect(() => {
@@ -207,35 +233,69 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
     let consecutiveErrorCount = 0;
     const MAX_CONSECUTIVE_ERRORS = 8;
 
+    // Autoplay blocked (iOS Low Power Mode, Safari "Never Auto-Play"): the
+    // stall watchdog used to swap clips every ~4s for the whole session.
+    // Hold the current clip instead and resume it on the next tap.
+    // touchstart isn't a user activation on iOS (touchend and click are).
+    let autoplayBlocked = false;
+    const GESTURE_EVENTS = ['touchend', 'click', 'keydown'];
+    function removeGestureListeners() {
+      GESTURE_EVENTS.forEach(e => document.removeEventListener(e, unlockPlayback, true));
+    }
+    function unlockPlayback() {
+      removeGestureListeners();
+      autoplayBlocked = false;
+      getActive().play().catch(markBlocked);
+      // WebKit lifts the restriction per element: prime the idle one too, or
+      // the next swap is blocked again.
+      const idle = getNext();
+      idle.play().catch(() => {});
+      idle.pause();
+    }
+    /** True if play() was refused for lack of a user gesture (not an AbortError from a src change). */
+    function markBlocked(err: unknown): boolean {
+      if ((err as { name?: string } | null)?.name !== 'NotAllowedError') return false;
+      if (!autoplayBlocked) {
+        autoplayBlocked = true;
+        GESTURE_EVENTS.forEach(e =>
+          document.addEventListener(e, unlockPlayback, { capture: true, passive: true })
+        );
+      }
+      return true;
+    }
+
     let revealed = false;
+    // 'playing' = actually rendering frames (best signal)
+    // 'resize' = video dimensions changed (fires when first frame decodes)
+    // 'loadeddata' / 'canplay' = fallback for browsers that don't fire playing
+    const REVEAL_EVENTS = ['playing', 'resize', 'loadeddata', 'canplay'];
+    // Both slots: if the first clip fails, slot B takes over and must be able
+    // to reveal (it used to play hidden until the 12s fallback).
+    const slots = [va, vb];
+    function removeRevealListeners() {
+      for (const el of slots) REVEAL_EVENTS.forEach(e => el.removeEventListener(e, revealVideo));
+    }
     function revealVideo() {
-      if (revealed || !va) return;
-      // Only reveal once the video has actual dimensions AND is playing —
-      // Chrome shows a distorted/zoomed first frame if we reveal too early
-      if (va.videoWidth === 0 || va.videoHeight === 0) {
+      if (revealed) return;
+      // Only reveal once the ACTIVE video has actual dimensions AND is playing —
+      // Chrome shows a distorted/zoomed first frame if we reveal too early.
+      // Checking the active slot also keeps a preloading slot from revealing.
+      const el = getActive();
+      if (el.videoWidth === 0 || el.videoHeight === 0) {
         // Dimensions not ready yet — wait for next event
         return;
       }
       revealed = true;
-      va.removeEventListener('loadeddata', revealVideo);
-      va.removeEventListener('canplay', revealVideo);
-      va.removeEventListener('playing', revealVideo);
-      va.removeEventListener('resize', revealVideo);
+      removeRevealListeners();
       if (!mountedRef.current) return;
       // Small delay lets Chrome finish compositing the frame with correct object-fit
       requestAnimationFrame(() => {
-        if (!mountedRef.current || !va) return;
-        va.style.visibility = 'visible';
+        if (!mountedRef.current) return;
+        getActive().style.visibility = 'visible';
         setVideoReady(true);
       });
     }
-    // 'playing' = actually rendering frames (best signal)
-    // 'resize' = video dimensions changed (fires when first frame decodes)
-    // 'loadeddata' / 'canplay' = fallback for browsers that don't fire playing
-    va.addEventListener('playing', revealVideo);
-    va.addEventListener('resize', revealVideo);
-    va.addEventListener('loadeddata', revealVideo);
-    va.addEventListener('canplay', revealVideo);
+    for (const el of slots) REVEAL_EVENTS.forEach(e => el.addEventListener(e, revealVideo));
 
     // NOW kick off the load — listeners are in place to catch even the
     // synchronous events that fire on a cache hit.
@@ -248,32 +308,35 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
     // Now we retry every 500ms up to 12s, and only reveal when ready.
     let safetyTries = 0;
     const safetyInterval = setInterval(() => {
-      if (revealed || !va) {
+      if (revealed) {
         clearInterval(safetyInterval);
         return;
       }
       safetyTries++;
-      if (va.videoWidth > 0 && va.videoHeight > 0) {
+      const active = getActive(); // whichever slot is playing, not just A
+      if (active.videoWidth > 0 && active.videoHeight > 0) {
         clearInterval(safetyInterval);
         revealVideo();
       } else if (safetyTries >= 24) {
         // 12s gone and still no dimensions — give up on video, fall back
         clearInterval(safetyInterval);
         if (mountedRef.current) {
-          console.warn('Video failed to decode after 12s — falling back to canvas');
-          setMode('canvas');
+          console.warn('Video failed to decode after 12s — falling back to the portrait');
+          setMode('image');
         }
       }
     }, 500);
 
-    va.play().catch(() => {
+    va.play().catch(e => {
+      markBlocked(e);
       // Autoplay blocked — wait a beat then reveal the still frame
       trackTimeout(revealVideo, 300);
     });
 
     /** Pick the best video index for the current emotion */
     function pickEmotionVideo(): number {
-      const emo = currentEmotionRef.current;
+      // A latched emotion wins over a prop that has already gone back to neutral
+      const emo = pendingEmotionRef.current ?? currentEmotionRef.current;
       const preferred = EMOTION_VIDEO_MAP[emo] || EMOTION_VIDEO_MAP.neutral;
       // Find the first preferred video that exists in our available list
       for (const pref of preferred) {
@@ -291,8 +354,43 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
     // emotion may now want a different video.
     let preloadedIdx = -1;
 
+    // Hide + release the outgoing clip only once the incoming one has a frame
+    // on screen. A fixed 50ms delay left the hero black whenever the new clip
+    // loaded slower (e.g. an emotion change reloading it at the boundary).
+    // The fallback stops a stuck load from keeping two decoders alive.
+    let cancelPendingHide: (() => void) | null = null;
+    function hideWhenNextPaints(current: HTMLVideoElement, next: HTMLVideoElement) {
+      let raf = 0;
+      const fallback = setTimeout(finish, 1500);
+      function cancel() {
+        next.removeEventListener('loadeddata', onFrame);
+        next.removeEventListener('playing', onFrame);
+        clearTimeout(fallback);
+        cancelAnimationFrame(raf);
+        if (cancelPendingHide === cancel) cancelPendingHide = null;
+      }
+      function finish() {
+        cancel();
+        // A later swap may have made `current` active again
+        if (!mountedRef.current || current === getActive()) return;
+        current.style.visibility = 'hidden';
+        releaseVideo(current);
+      }
+      function onFrame() {
+        if (raf || next.readyState < 2) return; // < HAVE_CURRENT_DATA: no frame yet
+        // Two frames: by then the new clip has been painted at least once
+        raf = requestAnimationFrame(() => { raf = requestAnimationFrame(finish); });
+      }
+      cancelPendingHide = cancel;
+      next.addEventListener('loadeddata', onFrame);
+      next.addEventListener('playing', onFrame);
+      onFrame(); // a preloaded clip may already have its first frame
+    }
+
     function preloadNext() {
       if (videos.length <= 1 || preloadedRef.current) return;
+      // A hide still pending would release the element we preload into
+      cancelPendingHide?.();
       preloadedRef.current = true;
       const nextIdx = pickEmotionVideo();
       preloadedIdx = nextIdx;
@@ -304,7 +402,13 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
 
     function swapToNext() {
       if (videos.length === 0) return;
+      // A hide still pending from the last swap targets the element we are
+      // about to load into — drop it.
+      cancelPendingHide?.();
       currentIndexRef.current = pickEmotionVideo();
+      // The latched emotion is consumed only here, when its clip starts —
+      // not at the 80% preload, which would drop it again.
+      pendingEmotionRef.current = null;
 
       const next = getNext();
       const current = getActive();
@@ -319,21 +423,17 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
       }
       preloadedIdx = -1;
 
-      // Show next, hide current — instant swap
+      // Show next; current stays up (frozen on its last frame) until next paints
       next.style.visibility = 'visible';
-      next.play().catch(() => {
-        trackTimeout(() => { if (mountedRef.current) next.play().catch(() => {}); }, 300);
+      next.play().catch(e => {
+        if (markBlocked(e)) return; // retrying can't help until a tap
+        trackTimeout(() => { if (mountedRef.current) next.play().catch(markBlocked); }, 300);
       });
-
-      // Hide and release old one after a tiny delay (lets the new one render first)
-      trackTimeout(() => {
-        if (!mountedRef.current) return;
-        current.style.visibility = 'hidden';
-        releaseVideo(current);
-      }, 50);
 
       activeSlotRef.current = activeSlotRef.current === 'A' ? 'B' : 'A';
       preloadedRef.current = false;
+
+      hideWhenNextPaints(current, next);
     }
 
     function onTimeUpdate(this: HTMLVideoElement) {
@@ -366,15 +466,21 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
       // synchronous onError → swapToNext → onError chains until stack overflow.
       consecutiveErrorCount++;
       if (consecutiveErrorCount > MAX_CONSECUTIVE_ERRORS) {
-        console.warn('Too many consecutive video errors — falling back to canvas');
-        if (mountedRef.current) setMode('canvas');
+        console.warn('Too many consecutive video errors — falling back to the portrait');
+        if (mountedRef.current) setMode('image');
         return;
       }
       if (this === getActive()) swapToNext();
     }
-    // Reset the consecutive-error counter when a video successfully plays.
+    // Reset the consecutive-error counter (and the autoplay block) when a
+    // video successfully plays.
     function onPlaying(this: HTMLVideoElement) {
-      if (this === getActive()) consecutiveErrorCount = 0;
+      if (this !== getActive()) return;
+      consecutiveErrorCount = 0;
+      if (autoplayBlocked) {
+        autoplayBlocked = false;
+        removeGestureListeners();
+      }
     }
 
     function onVisibilityChange() {
@@ -382,7 +488,7 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
         getActive().pause();
       } else {
         const active = getActive();
-        if (active.src) active.play().catch(() => {});
+        if (active.src) active.play().catch(markBlocked);
       }
     }
 
@@ -393,9 +499,14 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
       if (!mountedRef.current) return;
       const active = getActive();
       if (active.paused && !document.hidden) {
-        stallCount++;
-        if (stallCount > 1) { swapToNext(); stallCount = 0; }
-        else active.play().catch(() => swapToNext());
+        if (autoplayBlocked) {
+          // Waiting for a tap — swapping clips can't help, it only flickers
+          stallCount = 0;
+        } else {
+          stallCount++;
+          if (stallCount > 1) { swapToNext(); stallCount = 0; }
+          else active.play().catch(e => { if (!markBlocked(e)) swapToNext(); });
+        }
       } else if (active.currentTime === lastTime && !active.paused) {
         stallCount++;
         if (stallCount > 2) { swapToNext(); stallCount = 0; }
@@ -422,6 +533,9 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
       // don't touch torn-down elements / call setState after unmount.
       for (const t of pendingTimeouts) clearTimeout(t);
       pendingTimeouts.length = 0;
+      cancelPendingHide?.();
+      removeRevealListeners();
+      removeGestureListeners();
       va.removeEventListener('timeupdate', onTimeUpdate);
       vb.removeEventListener('timeupdate', onTimeUpdate);
       va.removeEventListener('ended', onEnded);

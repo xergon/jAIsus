@@ -21,9 +21,12 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
   useModalA11y({ isOpen, onClose, ref: dialogRef });
   const keyboard = useKeyboardInset(isOpen);
 
+  // Trimmed: mobile keyboards add a space after a picked suggestion
+  // ("forgiveness "), which matched nothing. The input keeps the raw text.
+  const q = search.trim().toLowerCase();
   const filtered = parables.filter(p =>
-    p.title.toLowerCase().includes(search.toLowerCase()) ||
-    p.themes.some(t => t.toLowerCase().includes(search.toLowerCase()))
+    p.title.toLowerCase().includes(q) ||
+    p.themes.some(t => t.toLowerCase().includes(q))
   );
 
   // Audit fix: when ParableReader opens, hide this drawer's interactive
@@ -65,7 +68,32 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
         </div>
 
         <div className="shrink-0 px-4 pb-2">
-          <h2 id="parables-title" className="text-lg font-bold text-stone-800">Explore Parables</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 id="parables-title" className="text-lg font-bold text-stone-800">Explore Parables</h2>
+            {/* Touch screen-reader users can't reach the aria-hidden backdrop
+                or press Escape. Being first, it also takes focus on open, so
+                Android no longer pops the keyboard for the search box. */}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close parables"
+              className="shrink-0 w-11 h-11 -mr-2 flex items-center justify-center rounded-full text-stone-500 hover:bg-stone-100 active:scale-95 transition-transform"
+            >
+              <svg
+                className="w-5 h-5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M18 6L6 18" />
+                <path d="M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
           <label htmlFor="parables-search" className="sr-only">Search parables</label>
           <input
             id="parables-search"
@@ -78,14 +106,14 @@ export function ParablesDrawer({ isOpen, onClose, onAskAbout }: ParablesDrawerPr
         </div>
 
         <div className="min-h-0 overflow-y-auto px-4 pb-6 max-h-[60vh] modal-scroll">
-          {filtered.length === 0 && search !== '' && (
+          {filtered.length === 0 && q !== '' && (
             <EmptyState
               icon="🔍"
               title="No parables match"
-              description={`Nothing for "${search}". Try another word or theme.`}
+              description={`Nothing for "${search.trim()}". Try another word or theme.`}
             />
           )}
-          {filtered.length === 0 && search === '' && (
+          {filtered.length === 0 && q === '' && (
             <EmptyState
               icon="📖"
               title="No parables available"

@@ -12,6 +12,7 @@ import type { UIMessage } from 'ai';
 import { stripAllEmotionTags } from './emotions';
 import { listFavorites, type Favorite } from './favorites';
 import { parables } from './parables';
+import { isVisionPingText } from '@/lib/vision-prompts';
 
 export type SearchSource = 'chat' | 'favorite' | 'parable';
 
@@ -27,6 +28,9 @@ export interface SearchResult {
   context?: string;
   /** Optional timestamp for chat / favorite results. Used as a tiebreaker when ranking. */
   timestamp?: number;
+  /** Chat results: position in the saved history (higher = newer). Saved
+   *  messages carry no timestamps, so this is what ranks equal chat hits. */
+  order?: number;
   /** Higher = better match. */
   score: number;
 }
@@ -54,6 +58,8 @@ interface ChatItem {
   id: string;
   searchable: string;
   timestamp: number | undefined;
+  /** Index in the stored (chronological) history; higher = newer. */
+  order: number;
 }
 
 /** Tolerant extraction of a UIMessage timestamp. Falls back to undefined. */
@@ -81,10 +87,9 @@ function readMessageTimestamp(msg: UIMessage): number | undefined {
   return undefined;
 }
 
-/** Same rule ChatInterface uses to hide auto-vision pings, e.g. "(observe what you see…)". */
+/** Auto-vision pings, matched by exact text like ChatInterface does. */
 function isInternalPrompt(text: string): boolean {
-  const t = text.trim();
-  return t.startsWith('(') && t.endsWith(')');
+  return isVisionPingText(text);
 }
 
 /**
@@ -105,7 +110,7 @@ function readChatItems(): ChatItem[] {
   }
 
   const items: ChatItem[] = [];
-  for (const msg of messages) {
+  for (const [order, msg] of messages.entries()) {
     if (!msg || typeof msg !== 'object' || !Array.isArray(msg.parts)) continue;
     const textParts: string[] = [];
     for (const part of msg.parts) {
@@ -133,6 +138,7 @@ function readChatItems(): ChatItem[] {
       id: typeof msg.id === 'string' ? msg.id : `chat-${items.length}`,
       searchable: trimmed,
       timestamp: readMessageTimestamp(msg),
+      order,
     });
   }
   return items;
@@ -168,6 +174,18 @@ function firstMatchIndex(haystack: string, terms: string[]): number {
   return best;
 }
 
+/** Move an end index back so it doesn't split a surrogate pair (emoji). */
+function safeEnd(s: string, end: number): number {
+  const c = s.charCodeAt(end - 1);
+  return end > 0 && end < s.length && c >= 0xd800 && c <= 0xdbff ? end - 1 : end;
+}
+
+/** Move a start index forward so it doesn't begin on a lone low surrogate. */
+function safeStart(s: string, start: number): number {
+  const c = s.charCodeAt(start);
+  return start > 0 && start < s.length && c >= 0xdc00 && c <= 0xdfff ? start + 1 : start;
+}
+
 /**
  * Build a ~EXCERPT_LENGTH character window centered on the first match.
  * Adds ellipsis markers when we trim either edge.
@@ -176,7 +194,7 @@ function buildExcerpt(text: string, terms: string[]): string {
   if (text.length <= EXCERPT_LENGTH) return text;
   const matchAt = firstMatchIndex(text, terms);
   if (matchAt === -1) {
-    return `${text.slice(0, EXCERPT_LENGTH).trimEnd()}…`;
+    return `${text.slice(0, safeEnd(text, EXCERPT_LENGTH)).trimEnd()}…`;
   }
   // Center the window on the match — half the budget on either side.
   const half = Math.floor(EXCERPT_LENGTH / 2);
@@ -193,6 +211,9 @@ function buildExcerpt(text: string, terms: string[]): string {
     const space = text.lastIndexOf(' ', end);
     if (space !== -1 && end - space < 20) end = space;
   }
+  // A cut through an emoji would show '�'.
+  start = safeStart(text, start);
+  end = safeEnd(text, end);
   const head = start > 0 ? '…' : '';
   const tail = end < text.length ? '…' : '';
   return `${head}${text.slice(start, end).trim()}${tail}`;
@@ -284,6 +305,7 @@ export function searchAll(query: string): SearchResult[] {
       fullText: item.searchable,
       context: 'From your chat',
       timestamp: item.timestamp,
+      order: item.order,
       score,
     });
   }
@@ -342,10 +364,14 @@ export function searchAll(query: string): SearchResult[] {
     });
   }
 
-  // Rank: score desc, then timestamp desc (recent wins ties), then id for
-  // determinism so unit tests don't flake.
+  // Rank: score desc, then recency (recent wins ties), then id for
+  // determinism so unit tests don't flake. Chat recency comes from history
+  // order: saved messages have no timestamps.
   results.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    if (a.order !== undefined && b.order !== undefined && a.order !== b.order) {
+      return b.order - a.order;
+    }
     const at = a.timestamp ?? 0;
     const bt = b.timestamp ?? 0;
     if (bt !== at) return bt - at;

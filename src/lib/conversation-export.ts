@@ -15,6 +15,7 @@
 import type { UIMessage } from 'ai';
 import type { Favorite } from './favorites';
 import { stripAllEmotionTags } from './emotions';
+import { isVisionPingText } from '@/lib/vision-prompts';
 
 export type ExportFormat = 'markdown' | 'json' | 'plaintext';
 
@@ -26,6 +27,9 @@ export interface ExportOptions {
   includeFavorites?: boolean;
   /** Filename (without extension). Default 'jaisus-export-YYYY-MM-DD' */
   filename?: string;
+  /** The chat as shown on screen (UIMessage[]). Defaults to the copy saved in
+   *  localStorage, which keeps only the last 100 messages. */
+  messages?: ReadonlyArray<unknown>;
 }
 
 export interface ExportPayload {
@@ -99,10 +103,9 @@ function extractText(msg: UIMessageLike): string {
   return out.join('');
 }
 
-/** Same rule ChatInterface uses to hide auto-vision pings, e.g. "(observe what you see…)". */
+/** Auto-vision pings, matched by exact text like ChatInterface does. */
 function isInternalPrompt(text: string): boolean {
-  const t = text.trim();
-  return t.startsWith('(') && t.endsWith(')');
+  return isVisionPingText(text);
 }
 
 /**
@@ -149,14 +152,15 @@ function normalizeFavorite(value: unknown): Favorite | null {
 
 /**
  * Build the export payload from current localStorage state. Pure — doesn't
- * touch the DOM. Safe to call SSR (returns empty arrays then).
+ * touch the DOM. Safe to call SSR (returns empty arrays then). `chat` is the
+ * live message list when the caller has it; otherwise the saved copy is read.
  */
-export function buildExport(): ExportPayload {
+export function buildExport(chat?: ReadonlyArray<unknown>): ExportPayload {
   const exportedAt = new Date().toISOString();
 
   // --- Messages ---
   const messages: ExportPayload['messages'] = [];
-  const rawChat = safeReadJson(CHAT_STORAGE_KEY);
+  const rawChat = chat ?? safeReadJson(CHAT_STORAGE_KEY);
   if (Array.isArray(rawChat)) {
     for (const raw of rawChat) {
       if (!isObject(raw)) continue;
@@ -205,10 +209,33 @@ export function buildExport(): ExportPayload {
 
 // ─── Formatting ──────────────────────────────────────────────────────
 
-/** ISO date → `YYYY-MM-DD`. */
+/** `YYYY-MM-DD` of the user's LOCAL calendar day (the filename uses it too). */
+function localDateStamp(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** ISO timestamp → local `YYYY-MM-DD`. Slicing the ISO string gave the UTC
+ *  date, a day off from the filename near midnight. */
 function toDateOnly(iso: string): string {
-  // `Date#toISOString()` always yields `YYYY-MM-DDTHH:...` — slicing is safe.
-  return iso.slice(0, 10);
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : localDateStamp(d);
+}
+
+/**
+ * Markdown blockquote lines for `text`. Single line breaks become hard breaks
+ * (two trailing spaces); CommonMark would otherwise join the lines into one.
+ * Blank lines and lines before them need none — they already end a paragraph.
+ */
+function quoteLines(text: string): string[] {
+  const src = text.split('\n');
+  return src.map((line, i) => {
+    const next = src[i + 1];
+    const hardBreak = next !== undefined && line.trim() !== '' && next.trim() !== '';
+    return `> ${line}${hardBreak ? '  ' : ''}`;
+  });
 }
 
 /** `Date.now()` ms → human-readable date in the user's locale. */
@@ -283,8 +310,7 @@ function formatMarkdown(payload: ExportPayload): string {
       const who = msg.role === 'user' ? 'You' : 'jAIsus';
       // Render each message body as a blockquote, preserving internal line
       // breaks by prefixing every line with `> `.
-      const body = msg.text.split('\n').join('\n> ');
-      lines.push(`> **${who}:** ${body}`);
+      lines.push(...quoteLines(`**${who}:** ${msg.text}`));
       lines.push('');
     }
   }
@@ -297,11 +323,14 @@ function formatMarkdown(payload: ExportPayload): string {
       lines.push(`### ${favoriteKindLabel(group.kind)}`);
       lines.push('');
       for (const fav of group.items) {
-        const body = fav.content.split('\n').join('\n> ');
-        lines.push(`> ${body}`);
+        lines.push(...quoteLines(fav.content));
         if (fav.context) {
+          // Empty quoted line: the context is its own paragraph in the quote.
+          lines.push('>');
           lines.push(`> *${fav.context}*`);
         }
+        // Blank line ends the quote; otherwise "Saved on" is pulled into it.
+        lines.push('');
         lines.push(`*Saved on ${formatHumanDate(fav.createdAt)}*`);
         lines.push('');
       }
@@ -396,14 +425,10 @@ const FORMAT_DESCRIPTORS: Record<ExportFormat, FormatDescriptor> = {
   plaintext: { mime: 'text/plain;charset=utf-8', extension: 'txt' },
 };
 
-function defaultFilename(): string {
-  const today = new Date();
-  // Always YYYY-MM-DD in local time, not UTC — matches what the user sees
-  // on the rest of the app.
-  const y = today.getFullYear();
-  const m = String(today.getMonth() + 1).padStart(2, '0');
-  const d = String(today.getDate()).padStart(2, '0');
-  return `jaisus-export-${y}-${m}-${d}`;
+/** Always YYYY-MM-DD in local time, not UTC — matches what the user sees on
+ *  the rest of the app and the export's own "Exported" line. */
+function defaultFilename(exportedAt: string): string {
+  return `jaisus-export-${toDateOnly(exportedAt)}`;
 }
 
 /**
@@ -435,10 +460,10 @@ export function downloadExport(options: ExportOptions): boolean {
   }
 
   try {
-    const payload = applyOptions(buildExport(), options);
+    const payload = applyOptions(buildExport(options.messages), options);
     const contents = formatExport(payload, options.format);
     const descriptor = FORMAT_DESCRIPTORS[options.format];
-    const filename = `${options.filename ?? defaultFilename()}.${descriptor.extension}`;
+    const filename = `${options.filename ?? defaultFilename(payload.exportedAt)}.${descriptor.extension}`;
 
     const blob = new Blob([contents], { type: descriptor.mime });
     const url = URL.createObjectURL(blob);

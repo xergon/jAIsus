@@ -4,6 +4,7 @@ import { xai } from '@ai-sdk/xai';
 import { deepseek } from '@ai-sdk/deepseek';
 import { getPersonality, DEFAULT_PERSONALITY_ID, SHARED_RULES } from '@/lib/personalities';
 import { clientKey, rateLimit, rateLimitResponse } from '@/lib/rate-limit';
+import { isVisionPingText } from '@/lib/vision-prompts';
 
 export const maxDuration = 30;
 
@@ -25,6 +26,13 @@ const MAX_MESSAGES = 60;
 // Per-message text cap — defensive against a single absurdly long message
 // being pasted in.
 const MAX_MESSAGE_TEXT = 8000;
+
+// A length cap can cut an emoji in half, and Anthropic rejects a lone
+// surrogate with a 400 ("no low surrogate in string"). toWellFormed swaps
+// any lone surrogate (cut here, or sent by the client) for U+FFFD.
+function clip(text: string, max: number): string {
+  return text.slice(0, max).toWellFormed();
+}
 
 export async function POST(req: Request) {
   const rl = rateLimit(`chat:${clientKey(req)}`, CHAT_LIMIT);
@@ -77,9 +85,9 @@ export async function POST(req: Request) {
         .filter((p): p is { type: 'text'; text: string } =>
           !!p && typeof p === 'object' && p.type === 'text' && typeof (p as { text: unknown }).text === 'string')
         .map((p) => p.text)
-        .join('')
-        .slice(0, MAX_MESSAGE_TEXT),
+        .join(''),
     }))
+    .map((m) => ({ ...m, text: clip(m.text, MAX_MESSAGE_TEXT) }))
     .filter((m) => m.text.trim().length > 0);
 
   // Total input cap: the per-message caps alone still allow 60 × 8000 chars.
@@ -105,7 +113,7 @@ export async function POST(req: Request) {
   // holding an instructions sign in frame). Cap aggressively to bound prompt
   // length and limit what an attacker can fit in a quote-break attempt.
   const sceneDescription = typeof body.sceneDescription === 'string'
-    ? body.sceneDescription.slice(0, 800)
+    ? clip(body.sceneDescription, 800)
     : undefined;
   const personalityId = typeof body.personalityId === 'string' ? body.personalityId : undefined;
   const memoryContext = typeof body.memoryContext === 'string' ? body.memoryContext : undefined;
@@ -115,7 +123,7 @@ export async function POST(req: Request) {
   // a malformed request. Truncate (don't 400) so the rest of the request
   // still works.
   const safeMemoryContext = memoryContext
-    ? memoryContext.slice(0, 4000)
+    ? clip(memoryContext, 4000)
     : '';
 
   // Resolve personality. Built-ins live server-side; user-authored "custom"
@@ -151,7 +159,7 @@ export async function POST(req: Request) {
     // prompts still respect the TTS guardrails (no stage directions, emotion
     // tags). Without this, a custom prompt could produce "*smiles* Hello"
     // which the TTS engine would read literally.
-    const userPrompt = (c.systemPrompt as string).slice(0, MAX_INLINE_PROMPT);
+    const userPrompt = clip(c.systemPrompt as string, MAX_INLINE_PROMPT);
     personality = {
       id: c.id as string,
       name: String(c.name).slice(0, 80),
@@ -161,17 +169,17 @@ export async function POST(req: Request) {
       provider: 'claude',
       systemPrompt: userPrompt + SHARED_RULES,
       teachingPrompt: (typeof c.teachingPrompt === 'string'
-        ? c.teachingPrompt.slice(0, MAX_INLINE_PROMPT)
+        ? clip(c.teachingPrompt, MAX_INLINE_PROMPT)
         : userPrompt) + SHARED_RULES,
     };
   }
-  // Detect if this is an auto-vision ping (parenthetical message)
+  // Detect if this is an auto-vision ping (exact text of a client ping)
   const lastMsg = messages[messages.length - 1];
   const lastText = lastMsg?.parts
     ?.filter((p: UIMessagePart) => p.type === 'text')
     .map((p: UIMessagePart) => p.text ?? '')
     .join('') || '';
-  const isVisionPing = lastText.startsWith('(') && lastText.endsWith(')');
+  const isVisionPing = lastMsg?.role === 'user' && isVisionPingText(lastText);
   const hasVision = !!sceneDescription;
   const isClaude = personality.provider === 'claude';
 

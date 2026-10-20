@@ -50,6 +50,10 @@ function subscribeFailureMessage(error?: string): string | null {
   if (error?.startsWith('Push not supported')) {
     return "This browser can't receive daily verses. On iPhone, add jAIsus to your Home Screen first.";
   }
+  if (error === 'Server registration failed') {
+    // The browser side is done; push-client re-sends it on a later app load.
+    return "Couldn't reach jAIsus to turn on daily verses. It will try again next time you open the app.";
+  }
   return "Couldn't turn on daily verses right now.";
 }
 

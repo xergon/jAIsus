@@ -544,9 +544,9 @@ test.describe('12. Static Assets', () => {
   test('at least one video file loads', async ({ request }) => {
     const videos = [
       '/jAisus-embraces.mp4',
-      '/jaisus-embraces.mp4',
+      '/jaisus-embraces-1080.mp4',
       '/jAisus-loves-you.mp4',
-      '/jaisus-loves-you.mp4',
+      '/jaisus-loves-you-1080.mp4',
     ];
     let foundOne = false;
     for (const v of videos) {

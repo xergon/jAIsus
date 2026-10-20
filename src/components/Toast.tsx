@@ -10,7 +10,8 @@ import {
   type ToastVariant,
 } from '@/lib/toast';
 
-/** Maximum number of toasts visible at once. Older toasts are evicted FIFO. */
+/** Maximum number of toasts visible at once. Older toasts are evicted FIFO,
+ *  sticky ones (no auto-dismiss, or an action button) last. */
 const MAX_VISIBLE = 3;
 
 /** Duration (ms) of the slide-in / slide-out transition. */
@@ -99,11 +100,6 @@ function ToastCard({ toast, onDismiss, reducedMotion }: ToastCardProps) {
     handleClose();
   }, [toast.action, handleClose]);
 
-  // ARIA: errors are assertive alerts; everything else is a polite status.
-  const isError = toast.variant === 'error';
-  const role = isError ? 'alert' : 'status';
-  const ariaLive = isError ? 'assertive' : 'polite';
-
   // Build the transition class. `reducedMotion` users get no transform/opacity
   // transition at all — the card just appears.
   const transitionClasses = reducedMotion
@@ -116,10 +112,9 @@ function ToastCard({ toast, onDismiss, reducedMotion }: ToastCardProps) {
     : '-translate-y-4 opacity-0';
 
   return (
+    // Announced through ToastProvider's persistent live regions, not here: a
+    // live region inserted together with its text is usually not read.
     <div
-      role={role}
-      aria-live={ariaLive}
-      aria-atomic="true"
       className={[
         'pointer-events-auto w-full max-w-sm mx-auto',
         'rounded-xl shadow-lg',
@@ -174,10 +169,11 @@ function ToastCard({ toast, onDismiss, reducedMotion }: ToastCardProps) {
  * without React context.
  *
  * Behaviour:
- *   - Caps visible toasts at MAX_VISIBLE (3). Excess toasts evict the oldest.
+ *   - Caps visible toasts at MAX_VISIBLE (3). Excess toasts evict the oldest
+ *     auto-dismissing one; sticky toasts (duration 0 or an action) go last.
  *   - Each toast auto-dismisses after `duration` ms (0 disables auto-dismiss).
  *   - Per-toast timers are tracked and cleared on dismiss/unmount.
- *   - Renders nothing on the server (mounted client-only).
+ *   - With no toasts, renders only two empty, visually hidden live regions.
  */
 export function ToastProvider() {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -228,11 +224,14 @@ export function ToastProvider() {
       const incoming = detail.toast;
 
       setToasts((prev) => {
-        // Eviction: keep only the newest MAX_VISIBLE - 1, then append.
-        const trimmed =
-          prev.length >= MAX_VISIBLE
-            ? prev.slice(prev.length - (MAX_VISIBLE - 1))
-            : prev;
+        // Eviction: drop the oldest until there's room. Sticky toasts (e.g.
+        // VersionCheck's "new version — Refresh", shown only once) go last.
+        let trimmed = prev;
+        while (trimmed.length >= MAX_VISIBLE) {
+          const oldestFleeting = trimmed.findIndex((t) => t.duration > 0 && !t.action);
+          const evict = oldestFleeting >= 0 ? oldestFleeting : 0;
+          trimmed = trimmed.filter((_, i) => i !== evict);
+        }
 
         // Clear timers for any toasts we just evicted.
         const kept = new Set(trimmed.map((t) => t.id));
@@ -284,29 +283,50 @@ export function ToastProvider() {
     };
   }, []);
 
-  // Nothing to render — keep it cheap.
-  if (toasts.length === 0) return null;
-
+  // ARIA: errors are assertive alerts; everything else is a polite status.
+  // These regions are always rendered (also with no toasts) and stay at the
+  // same place in the tree, so screen readers are already watching them when
+  // a toast's text is added. aria-atomic="false": these roles default to
+  // atomic, which re-read every toast still on screen (e.g. a sticky "new
+  // version" toast) before each new one.
   return (
-    <div
-      // Fixed top-center stack. `pointer-events-none` so the wrapper never
-      // blocks underlying UI; individual cards re-enable pointer events.
-      // Audit fix: add safe-area-inset-top so toasts don't sit under the
-      // notch / status bar when running as a PWA on notched iPhones.
-      className="fixed inset-x-0 z-[100] flex flex-col items-center gap-2 px-4 pointer-events-none"
-      // Full-screen views with their own top bar (ParableReader) set
-      // --toast-top-offset so toasts sit below their controls.
-      style={{ top: 'calc(env(safe-area-inset-top, 0px) + var(--toast-top-offset, 1rem))' }}
-      aria-label="Notifications"
-    >
-      {toasts.map((t) => (
-        <ToastCard
-          key={t.id}
-          toast={t}
-          onDismiss={removeToast}
-          reducedMotion={reducedMotion}
-        />
-      ))}
-    </div>
+    <>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="false" aria-relevant="additions">
+        {toasts
+          .filter((t) => t.variant !== 'error')
+          .map((t) => (
+            <p key={t.id}>{t.message}</p>
+          ))}
+      </div>
+      <div className="sr-only" role="alert" aria-live="assertive" aria-atomic="false" aria-relevant="additions">
+        {toasts
+          .filter((t) => t.variant === 'error')
+          .map((t) => (
+            <p key={t.id}>{t.message}</p>
+          ))}
+      </div>
+      {toasts.length > 0 && (
+        <div
+          // Fixed top-center stack. `pointer-events-none` so the wrapper never
+          // blocks underlying UI; individual cards re-enable pointer events.
+          // Audit fix: add safe-area-inset-top so toasts don't sit under the
+          // notch / status bar when running as a PWA on notched iPhones.
+          className="fixed inset-x-0 z-[100] flex flex-col items-center gap-2 px-4 pointer-events-none"
+          // Full-screen views with their own top bar (ParableReader) set
+          // --toast-top-offset so toasts sit below their controls.
+          style={{ top: 'calc(env(safe-area-inset-top, 0px) + var(--toast-top-offset, 1rem))' }}
+          aria-label="Notifications"
+        >
+          {toasts.map((t) => (
+            <ToastCard
+              key={t.id}
+              toast={t}
+              onDismiss={removeToast}
+              reducedMotion={reducedMotion}
+            />
+          ))}
+        </div>
+      )}
+    </>
   );
 }

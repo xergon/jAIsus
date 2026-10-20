@@ -7,6 +7,8 @@ import { SkeletonCard } from '@/components/Skeleton';
 import { EmptyState } from '@/components/EmptyState';
 import { toast } from '@/lib/toast';
 import { track } from '@/lib/analytics';
+import { getStoredPersonalityId } from '@/lib/personalities';
+import { getCustomPersonality, isCustomId } from '@/lib/custom-personalities';
 
 interface TeachingPlayerProps {
   isOpen: boolean;
@@ -14,10 +16,16 @@ interface TeachingPlayerProps {
   onSpeak: (text: string) => void;
   isSpeaking: boolean;
   onStopSpeaking: () => void;
+  /** Active personality, so the teaching matches the voice that reads it.
+   *  Falls back to the stored one when the parent doesn't pass it. */
+  personalityId?: string;
 }
 
-export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpeaking }: TeachingPlayerProps) {
+export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpeaking, personalityId }: TeachingPlayerProps) {
   const [teaching, setTeaching] = useState('');
+  // Kept apart from `teaching` so a failure never shows a Listen button that
+  // would read the error aloud through paid TTS.
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [selectedTopic, setSelectedTopic] = useState('');
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -63,17 +71,27 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
     setSelectedTopic(topic);
     setLoading(true);
     setTeaching('');
+    setError('');
+
+    // Same personality payload as the chat transport: custom personalities
+    // live only in this browser, so their definition travels inline.
+    const pid = personalityId ?? getStoredPersonalityId();
+    const customPersonality = isCustomId(pid) ? getCustomPersonality(pid) : null;
 
     try {
       const res = await fetch('/api/teachings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic }),
+        body: JSON.stringify({
+          topic,
+          personalityId: pid,
+          ...(customPersonality ? { customPersonality } : {}),
+        }),
         signal: controller.signal,
       });
       if (!res.ok) {
         // Could be 429 (rate limit) or 400 (invalid topic) — surface generic message
-        setTeaching('Unable to generate teaching right now. Please try again in a moment.');
+        setError('Unable to generate teaching right now. Please try again in a moment.');
         toast.error('Could not generate teaching right now.');
         return;
       }
@@ -82,17 +100,28 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
         setTeaching(data.teaching);
         track('teaching.generated', { topic });
       } else {
-        setTeaching('Unable to generate teaching at this time. Please try again.');
+        setError('Unable to generate teaching at this time. Please try again.');
         toast.error('Could not generate teaching right now.');
       }
     } catch (err) {
-      // AbortError = user closed the modal; not an error to surface.
-      if ((err as Error)?.name === 'AbortError') return;
-      setTeaching('Unable to generate teaching at this time. Please try again.');
+      // AbortError = user closed the modal or picked another topic; not an
+      // error to surface.
+      if ((err as Error)?.name === 'AbortError') {
+        // Closed mid-generation (the close effect / unmount nulled the ref;
+        // a newer topic would have replaced it instead): drop the half-done
+        // selection so reopening shows "Pick a topic", not a blank body.
+        if (abortRef.current === null) setSelectedTopic('');
+        return;
+      }
+      setError('Unable to generate teaching at this time. Please try again.');
       toast.error('Could not generate teaching right now.');
     } finally {
-      if (abortRef.current === controller) abortRef.current = null;
-      setLoading(false);
+      // A newer topic's request may own the spinner now; only the latest
+      // request (or a close, which nulls the ref) ends loading.
+      if (abortRef.current === controller || abortRef.current === null) {
+        abortRef.current = null;
+        setLoading(false);
+      }
     }
   }
 
@@ -112,9 +141,22 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
           <div className="w-10 h-1 rounded-full bg-stone-300" aria-hidden="true" />
         </div>
 
-        <div className="px-5 pb-2">
-          <h2 id="teaching-title" className="text-lg font-bold text-stone-800">Dynamic Teachings</h2>
-          <p className="text-sm text-stone-500">Choose a topic to hear a teaching</p>
+        <div className="px-5 pb-2 flex items-start justify-between gap-3">
+          <div>
+            <h2 id="teaching-title" className="text-lg font-bold text-stone-800">Dynamic Teachings</h2>
+            <p className="text-sm text-stone-500">Choose a topic to hear a teaching</p>
+          </div>
+          {/* Screen-reader and keyboard users can't reach the backdrop tap. */}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close teachings"
+            className="shrink-0 w-11 h-11 -mr-2 flex items-center justify-center rounded-full text-stone-500 hover:bg-stone-100 active:scale-95 transition-transform"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
         </div>
 
         {/* Topic selector */}
@@ -146,6 +188,11 @@ export function TeachingPlayer({ isOpen, onClose, onSpeak, isSpeaking, onStopSpe
               <span className="sr-only">Preparing teaching...</span>
               <SkeletonCard />
             </div>
+          )}
+
+          {/* No role="alert": the error toast already announces it. */}
+          {!loading && error && (
+            <p className="text-sm text-stone-500 py-4">{error}</p>
           )}
 
           {!loading && teaching && (

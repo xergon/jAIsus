@@ -4,10 +4,11 @@ import { useState, useEffect, useEffectEvent, useRef, useCallback, useMemo } fro
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import type { ActivePanel } from '@/lib/types';
+import { FIRST_VISION_PROMPT, VISION_PROMPTS, isVisionPingText } from '@/lib/vision-prompts';
 import { useSpeechRecognition, type SpeechSessionEnd } from '@/hooks/useSpeechRecognition';
 import { useSpeechSynthesis, setStoredVoiceId, getVoiceOverride, setVoiceOverride } from '@/hooks/useSpeechSynthesis';
 import { useVoiceState } from '@/hooks/useVoiceState';
-import { useChatHistory } from '@/hooks/useChatHistory';
+import { useChatHistory, CHAT_HISTORY_KEY } from '@/hooks/useChatHistory';
 import { useCamera } from '@/hooks/useCamera';
 import { stripAllEmotionTags, type Emotion } from '@/lib/emotions';
 import { HeroSection } from './HeroSection';
@@ -60,15 +61,6 @@ function chatErrorMessage(error: Error): string {
 
 // The camera's automatic prompts. They are sent as user messages but are not
 // the user's words, so they are never shown as such.
-const FIRST_VISION_PROMPT = '(You just opened your eyes and can see the user for the first time. React with excitement and warmth to what you see!)';
-const VISION_PROMPTS = [
-  '(observe what you see and comment naturally)',
-  '(look around and share what catches your eye)',
-  '(react to what you see right now)',
-  '(notice something about the scene and mention it)',
-  '(comment on what is happening around you)',
-];
-const VISION_PING_TEXTS = new Set([FIRST_VISION_PROMPT, ...VISION_PROMPTS]);
 
 function messageText(message: UIMessage): string {
   return message.parts
@@ -78,7 +70,7 @@ function messageText(message: UIMessage): string {
 }
 
 function isVisionPing(message: UIMessage): boolean {
-  return message.role === 'user' && VISION_PING_TEXTS.has(messageText(message));
+  return message.role === 'user' && isVisionPingText(messageText(message));
 }
 
 /** The voice picked for this personality in Settings, else its own voice. */
@@ -151,6 +143,7 @@ export function ChatInterface() {
   const isListeningRef = useRef(false);
   const personalityRef = useRef('mushroom-guru');
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
   const prevStatusRef = useRef<string>('ready');
   const activeMessageIdRef = useRef<string | null>(null);
   const lastSpokenTextRef = useRef<string>('');
@@ -172,12 +165,15 @@ export function ChatInterface() {
   // A reply the user silenced while it was still streaming: the streaming-TTS
   // effect must not pick it back up (or restart it) as more text arrives.
   const mutedMessageIdRef = useRef<string | null>(null);
+  // The last reply that had a sentence queued. Speech ending before a reply
+  // spoke at all was the previous reply's, not a stop of this one.
+  const queuedMessageIdRef = useRef<string | null>(null);
   // Height of the voice-mode bottom bar, so the "Tap to interrupt" pill sits above it.
   const bottomBarRef = useRef<HTMLDivElement>(null);
   const [bottomBarHeight, setBottomBarHeight] = useState(0);
 
   // Camera / vision
-  const { isActive: cameraActive, sceneDescription, videoRef, toggle: toggleCamera, isSupported: cameraSupported, error: cameraError } = useCamera();
+  const { isActive: cameraActive, sceneDescription, videoRef, toggle: toggleCamera, stop: stopCamera, isSupported: cameraSupported, error: cameraError } = useCamera();
   // Keep scene in a ref so the transport body can access it without re-creating
   const sceneRef = useRef<string | null>(null);
   useEffect(() => { sceneRef.current = sceneDescription; }, [sceneDescription]);
@@ -303,7 +299,7 @@ export function ChatInterface() {
     const tryFirst = () => {
       tryFirstTimeoutRef.current = null;
       if (!mountedRef.current || hasReactedToCamera.current) return;
-      if (isChatBusy(statusRef.current) || isSpeakingRef.current || isMicBusy()) {
+      if (isChatBusy(statusRef.current) || isSpeakingRef.current || isMicBusy() || isUserComposing()) {
         tryFirstTimeoutRef.current = setTimeout(tryFirst, 500);
         return;
       }
@@ -364,7 +360,7 @@ export function ChatInterface() {
       // The user's turn comes first: a ping while the mic was open cut them
       // off mid-sentence. Pings pause during a hands-free conversation and
       // resume once it ends (10 s of silence, or the user stops it).
-      if (isMicBusy()) return;
+      if (isMicBusy() || isUserComposing()) return;
 
       lastVisionPingTimeRef.current = Date.now();
       const prompt = VISION_PROMPTS[promptIndex % VISION_PROMPTS.length];
@@ -458,6 +454,19 @@ export function ChatInterface() {
     };
   }, [messages, saveMessages, mounted, status]);
 
+  // Another tab (or the installed app) saved its conversation or cleared it:
+  // show that here too. Otherwise this tab's next save wrote its stale list
+  // over the other tab's messages. Not mid-reply, which would be cut short.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== CHAT_HISTORY_KEY && e.key !== null) return;
+      if (isChatBusy(statusRef.current)) return;
+      setMessages(loadMessages());
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [loadMessages, setMessages]);
+
   // Streaming TTS: feed sentences to the queue as they arrive during streaming
   useEffect(() => {
     // Keep prevStatusRef current while auto-speak is off, or turning it back
@@ -526,8 +535,10 @@ export function ChatInterface() {
     // spokenLengthRef makes sure each part of the text is queued once.
     if (status === 'streaming' || (prevStatusRef.current === 'streaming' && status === 'ready')) {
       const unprocessed = fullText.slice(spokenLengthRef.current);
-      // Split on sentence-ending punctuation
-      const sentenceRegex = /[^.!?]+[.!?]+/g;
+      // Split on sentence-ending punctuation followed by whitespace, so
+      // "3.16" or "$4.99" (or a "3." whose digits haven't streamed in yet)
+      // isn't cut mid-number. The end-of-stream flush below speaks the rest.
+      const sentenceRegex = /[\s\S]*?[.!?]+["'”’)]*(?=\s)/g;
       let match;
       let lastEnd = 0;
       while ((match = sentenceRegex.exec(unprocessed)) !== null) {
@@ -538,6 +549,7 @@ export function ChatInterface() {
           if (isSpeakable(c)) {
             startSpeaking();
             queueSentence(c);
+            queuedMessageIdRef.current = lastMessage.id;
           }
         }
         lastEnd = match.index + match[0].length;
@@ -570,7 +582,14 @@ export function ChatInterface() {
     if (!isSpeaking && voiceState === 'speaking') {
       // Speech was stopped from elsewhere (a panel's player) while the reply
       // is still streaming: don't start speaking it again on the next token.
-      if (statusRef.current === 'streaming' && activeMessageIdRef.current) {
+      // Not when this reply hasn't spoken yet: then it was the previous
+      // reply that finished (a question typed while it was still being
+      // read), and muting would leave the new reply silent.
+      if (
+        statusRef.current === 'streaming' &&
+        activeMessageIdRef.current &&
+        queuedMessageIdRef.current === activeMessageIdRef.current
+      ) {
         mutedMessageIdRef.current = activeMessageIdRef.current;
       }
       activeMessageIdRef.current = null;
@@ -608,53 +627,6 @@ export function ChatInterface() {
     sendMessage({ text });
   }, [status, sendMessage, startProcessing]);
 
-  // First time we hit speaking state in a session, and consent hasn't been
-  // decided yet, surface the one-time consent prompt. The ref guard ensures
-  // it only shows once per page-load even if the user toggles in/out of
-  // speaking state multiple times. We also avoid stacking on top of
-  // onboarding (looks awful, the user will dismiss without reading).
-  // Nor over an open panel or the notification prompt: it waits for the next
-  // reply instead (the ref is only set once it actually shows).
-  useEffect(() => {
-    if (vadConsent !== null) return;
-    if (vadPromptShownRef.current) return;
-    if (voiceState !== 'speaking') return;
-    if (showOnboarding || showNotificationPrompt || activePanel !== 'none') return;
-    vadPromptShownRef.current = true;
-    setShowVADPrompt(true);
-  }, [vadConsent, voiceState, showOnboarding, showNotificationPrompt, activePanel]);
-
-  // VAD hook — fully dormant unless consent is granted AND jAIsus is
-  // currently speaking. When it detects sustained voice activity, it
-  // stops TTS, resets the voice state machine, AND starts speech
-  // recognition so the user's barge-in is actually captured.
-  //
-  // User-reported bug fix: previously this only stopped TTS without
-  // starting recognition — so when the user spoke while jAIsus was
-  // speaking, jAIsus would go quiet but their voice was lost into
-  // the void. They had to tap the mic AGAIN to be heard.
-  useVoiceActivityDetection({
-    enabled: vadConsent === 'accepted' && voiceState === 'speaking' && !anyModalOpen,
-    onSpeechStart: () => {
-      // Barge-in is the clearest possible signal that the user wants
-      // voice mode — they're literally interrupting with their voice.
-      // Arm the hands-free loop (it only runs with auto-speak on).
-      voiceLoopActiveRef.current = autoSpeak;
-      // Also ends a reply still streaming, so the user's words don't start a
-      // second request alongside it.
-      interruptSpeech(true);
-      // Tiny delay lets the TTS audio element release the mic resources
-      // before recognition tries to acquire them. Without it, some
-      // browsers (Safari especially) fail to start recognition because
-      // the audio output device is still in use.
-      setTimeout(() => {
-        if (mountedRef.current && isSupported) {
-          startRecognition();
-        }
-      }, 150);
-    },
-  });
-
   // Notification opt-in — surface once the user has clearly engaged with
   // the app. Gated against stacking with onboarding or the VAD prompt so
   // modals never pile up. We also check `hasSeenNotificationPrompt()` so a
@@ -686,9 +658,18 @@ export function ChatInterface() {
     // when filtered count is high enough), and short-circuit the filter
     // once we've found enough visible messages.
     if (messages.length < 4) return;
+    // The user's own questions and the replies to them. Replies to camera
+    // pings don't count, or the camera alone triggered the prompt.
     let visibleCount = 0;
+    let answersUser = false;
     for (const m of messages) {
-      if (!isVisionPing(m)) visibleCount++;
+      if (m.role === 'user') {
+        answersUser = !isVisionPing(m);
+        if (answersUser) visibleCount++;
+      } else if (answersUser) {
+        visibleCount++;
+        answersUser = false;
+      }
       if (visibleCount >= 4) break;
     }
     if (visibleCount < 4) return;
@@ -763,6 +744,58 @@ export function ChatInterface() {
     clearError: clearVoiceError,
   } = useSpeechRecognition(handleVoiceResult, handleVoiceSessionEnd);
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
+
+  // First time we hit speaking state in a session, and consent hasn't been
+  // decided yet, surface the one-time consent prompt. The ref guard ensures
+  // it only shows once per page-load even if the user toggles in/out of
+  // speaking state multiple times. We also avoid stacking on top of
+  // onboarding (looks awful, the user will dismiss without reading).
+  // Nor over an open panel or the notification prompt: it waits for the next
+  // reply instead (the ref is only set once it actually shows).
+  // Barge-in needs speech recognition to hear what was said, so it isn't
+  // offered without it (e.g. Firefox).
+  useEffect(() => {
+    if (vadConsent !== null) return;
+    if (vadPromptShownRef.current) return;
+    if (!isSupported) return;
+    if (voiceState !== 'speaking') return;
+    if (showOnboarding || showNotificationPrompt || activePanel !== 'none') return;
+    vadPromptShownRef.current = true;
+    setShowVADPrompt(true);
+  }, [vadConsent, voiceState, showOnboarding, showNotificationPrompt, activePanel, isSupported]);
+
+  // VAD hook — fully dormant unless consent is granted AND jAIsus is
+  // currently speaking. When it detects sustained voice activity, it
+  // stops TTS, resets the voice state machine, AND starts speech
+  // recognition so the user's barge-in is actually captured.
+  //
+  // User-reported bug fix: previously this only stopped TTS without
+  // starting recognition — so when the user spoke while jAIsus was
+  // speaking, jAIsus would go quiet but their voice was lost into
+  // the void. They had to tap the mic AGAIN to be heard.
+  // Off without speech recognition: any sound would cut the reply off with
+  // nothing listening, and the armed loop would hold camera pings forever.
+  useVoiceActivityDetection({
+    enabled: vadConsent === 'accepted' && voiceState === 'speaking' && !anyModalOpen && isSupported,
+    onSpeechStart: () => {
+      // Barge-in is the clearest possible signal that the user wants
+      // voice mode — they're literally interrupting with their voice.
+      // Arm the hands-free loop (it only runs with auto-speak on).
+      voiceLoopActiveRef.current = autoSpeak;
+      // Also ends a reply still streaming, so the user's words don't start a
+      // second request alongside it.
+      interruptSpeech(true);
+      // Tiny delay lets the TTS audio element release the mic resources
+      // before recognition tries to acquire them. Without it, some
+      // browsers (Safari especially) fail to start recognition because
+      // the audio output device is still in use.
+      setTimeout(() => {
+        if (mountedRef.current && isSupported) {
+          startRecognition();
+        }
+      }, 150);
+    },
+  });
 
   // TTS started while the mic was open: drop the partial speech rather than
   // sending half a sentence in the middle of a reply.
@@ -849,6 +882,16 @@ export function ChatInterface() {
       || voiceToggleTimerRef.current !== null;
   }
 
+  // The user is typing a question: camera pings wait too, or one takes the
+  // turn and Send is blocked until its reply is over. Not focus alone (the
+  // input stays focused after a send), and a draft left alone for 15 s
+  // doesn't hold them back forever.
+  const inputDraftRef = useRef('');
+  const lastTypedAtRef = useRef(0);
+  function isUserComposing() {
+    return inputDraftRef.current.trim() !== '' && Date.now() - lastTypedAtRef.current < 15000;
+  }
+
   useEffect(() => {
     if (isListening) {
       startListening();
@@ -895,10 +938,13 @@ export function ChatInterface() {
     voiceLoopActiveRef.current = false;
     sendText(input);
     setInput('');
+    inputDraftRef.current = '';
   }
 
   function handleInputChange(value: string) {
     setInput(value);
+    inputDraftRef.current = value;
+    lastTypedAtRef.current = Date.now();
     if (voiceError) clearVoiceError();
   }
 
@@ -921,6 +967,11 @@ export function ChatInterface() {
       // runs with auto-speak on.
       voiceLoopActiveRef.current = autoSpeak;
       startRecognition();
+    } else {
+      // No speech recognition (e.g. Firefox): start() only shows the "not
+      // supported" message. Offer the keyboard instead of doing nothing.
+      startRecognition();
+      textInputRef.current?.focus();
     }
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }
@@ -975,8 +1026,9 @@ export function ChatInterface() {
       //     recognition after a short delay.
       const wasLoopArmed = voiceLoopActiveRef.current;
       // Barging in also ends the stream; stopping keeps its text on screen.
-      interruptSpeech(!wasLoopArmed);
-      if (wasLoopArmed) {
+      // Without speech recognition the button can only stop.
+      interruptSpeech(!wasLoopArmed && isSupported);
+      if (wasLoopArmed || !isSupported) {
         voiceLoopActiveRef.current = false;
       } else {
         voiceLoopActiveRef.current = autoSpeak;
@@ -1436,6 +1488,7 @@ export function ChatInterface() {
               )}
               <form onSubmit={handleTextSubmit} className="flex items-center gap-2">
                 <input
+                  ref={textInputRef}
                   type="text"
                   value={input}
                   onChange={e => handleInputChange(e.target.value)}
@@ -1472,10 +1525,13 @@ export function ChatInterface() {
         onSpeak={speak}
         isSpeaking={isSpeaking}
         onStopSpeaking={stopSpeaking}
+        personalityId={personalityId}
       />
       <SettingsPanel
         isOpen={activePanel === 'settings'}
         onClose={() => setActivePanel('none')}
+        // Export the chat as shown, not the 100-message saved copy.
+        messages={messages}
         autoSpeak={autoSpeak}
         onToggleAutoSpeak={() => {
           const next = !autoSpeak;
@@ -1483,8 +1539,9 @@ export function ChatInterface() {
           // never ended, because the end-of-stream signal was never sent.
           if (!next) interruptSpeech();
           // The camera's preview and off switch exist only in voice mode, so
-          // it can't keep running in text mode.
-          if (!next && cameraActive) toggleCamera();
+          // it can't keep running in text mode. stop() also cancels a camera
+          // still waiting on its permission prompt (not yet active).
+          if (!next) stopCamera();
           // An old hands-free flag would otherwise open the mic by itself
           // (behind Settings) as soon as auto-speak came back on.
           voiceLoopActiveRef.current = false;
@@ -1501,7 +1558,11 @@ export function ChatInterface() {
         onVisionIntervalChange={handleVisionIntervalChange}
         cameraActive={cameraActive}
         personalityId={personalityId}
-        onPersonalityChange={handlePersonalityChange}
+        // Re-tapping the current personality changes nothing, so it must not
+        // abort a reply that's on its way.
+        onPersonalityChange={(id) => {
+          if (id !== personalityRef.current) handlePersonalityChange(id);
+        }}
         vadEnabled={vadConsent === 'accepted'}
         onToggleVad={() => {
           const next: VADConsent = vadConsent === 'accepted' ? 'declined' : 'accepted';

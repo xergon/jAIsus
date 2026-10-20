@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState } from 'react';
 import type { JSX, TouchEvent } from 'react';
 import { useModalA11y } from '@/hooks/useModalA11y';
 
@@ -80,10 +80,14 @@ export function OnboardingOverlay({
 
   useModalA11y({ isOpen, onClose: onComplete, ref: dialogRef });
 
-  // When the overlay is re-opened (e.g. via a debug reset), restart at slide 0.
-  useEffect(() => {
+  // When the overlay is re-opened (e.g. via a debug reset), restart at slide
+  // 0. Adjusted during render (React's "store info from previous renders"
+  // pattern).
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen);
     if (isOpen) setIndex(0);
-  }, [isOpen]);
+  }
 
   if (!isOpen) return null;
 

@@ -62,7 +62,11 @@ const nextConfig: NextConfig = {
       // extension. This keeps `Cache-Control: no-store` on HTML responses
       // (root, error pages, any future SSR route) without affecting the
       // immutable hashed assets under /_next/static.
-      source: '/((?!_next/static|_next/image|favicon\\.ico|.*\\..*).*)',
+      // /api/og is excluded on purpose: a config header wins over the route's
+      // own Cache-Control, and the OG card is built to be served from the
+      // CDN (public, s-maxage=86400). It still gets SECURITY_HEADERS from
+      // the catch-all rule below. Other /api routes stay no-store.
+      source: '/((?!_next/static|_next/image|api/og|favicon\\.ico|.*\\..*).*)',
       headers: [
         { key: 'Cache-Control', value: 'no-store' },
         ...SECURITY_HEADERS,

@@ -4,6 +4,7 @@ import type { JSX } from 'react';
 import { useEffect, useSyncExternalStore } from 'react';
 import {
   getStreakState,
+  isStreakActive,
   recordActivity,
   type StreakState,
 } from '@/lib/streaks';
@@ -63,7 +64,11 @@ let cachedKey = '';
 let cachedState: StreakState | null = null;
 
 function getStreakSnapshot(): StreakState {
-  const next = getStreakState();
+  const stored = getStreakState();
+  // With autoRecord={false} (activity is recorded on send), a streak that
+  // lapsed days ago would still show its old count until the next message.
+  // Treat a lapsed streak as 0, i.e. no badge.
+  const next = isStreakActive(stored) ? stored : { ...stored, current: 0 };
   const key = `${next.current}|${next.longest}|${next.lastActive}|${next.totalDays}`;
   if (!cachedState || key !== cachedKey) {
     cachedKey = key;
@@ -93,7 +98,8 @@ export function StreakBadge({
     if (autoRecord) recordActivity();
   }, [autoRecord]);
 
-  // Nothing to show before mount, or before the user has used the app at all.
+  // Nothing to show before mount, before the user has used the app at all,
+  // or once the streak has lapsed.
   if (!state || state.current === 0) return null;
 
   const { label, chip } = tierFor(state.current);

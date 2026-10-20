@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 /**
  * Long-form audio recorder built on MediaRecorder + Web Audio API.
@@ -41,6 +41,19 @@ export interface UseAudioRecorderResult {
   cancel: () => void;
 }
 
+// Support can't change while the page is open: nothing to subscribe to.
+const subscribeToSupport = () => () => {};
+function getSupportSnapshot(): boolean {
+  return (
+    typeof MediaRecorder !== 'undefined' &&
+    !!navigator.mediaDevices?.getUserMedia &&
+    (typeof AudioContext !== 'undefined' ||
+      typeof (window as unknown as { webkitAudioContext?: unknown }).webkitAudioContext !== 'undefined')
+  );
+}
+// Server render and hydration report unsupported, as the old mount effect did.
+const getServerSupportSnapshot = () => false;
+
 function pickMimeType(): string {
   if (typeof MediaRecorder === 'undefined') return '';
   const candidates = [
@@ -65,7 +78,8 @@ export function useAudioRecorder({
   const [level, setLevel] = useState(0);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [isSupported, setIsSupported] = useState(false);
+  // Read during render (not set from an effect), hydration-safe.
+  const isSupported = useSyncExternalStore(subscribeToSupport, getSupportSnapshot, getServerSupportSnapshot);
 
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -78,23 +92,14 @@ export function useAudioRecorder({
   const rafRef = useRef<number | null>(null);
   const generationRef = useRef(0);
   const cancelledRef = useRef(false);
+  // True from asking the recorder to stop until onstop tears down.
+  const stoppingRef = useRef(false);
   const onCompleteRef = useRef(onComplete);
   const onErrorRef = useRef(onError);
 
   // Keep callback refs fresh without re-creating start/stop.
   useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
   useEffect(() => { onErrorRef.current = onError; }, [onError]);
-
-  // Feature detect on mount only.
-  useEffect(() => {
-    if (typeof navigator === 'undefined') return;
-    const ok =
-      typeof MediaRecorder !== 'undefined' &&
-      !!navigator.mediaDevices?.getUserMedia &&
-      (typeof AudioContext !== 'undefined' ||
-        typeof (window as unknown as { webkitAudioContext?: unknown }).webkitAudioContext !== 'undefined');
-    setIsSupported(ok);
-  }, []);
 
   const tearDown = useCallback(() => {
     if (tickIntervalRef.current) { clearInterval(tickIntervalRef.current); tickIntervalRef.current = null; }
@@ -119,6 +124,7 @@ export function useAudioRecorder({
       streamRef.current = null;
     }
     recorderRef.current = null;
+    stoppingRef.current = false;
   }, []);
 
   const start = useCallback(async () => {
@@ -184,11 +190,18 @@ export function useAudioRecorder({
         // Some browsers ignore audioBitsPerSecond. Stop before the upload
         // would exceed the server's body limit, so the memo is kept instead
         // of being rejected after the fact.
-        if (myBytes >= MAX_RECORDING_BYTES && recorder.state === 'recording') recorder.stop();
+        if (myBytes >= MAX_RECORDING_BYTES && recorder.state === 'recording') {
+          stoppingRef.current = true;
+          setState('stopping');
+          recorder.stop();
+        }
       }
     };
     recorder.onstop = () => {
-      const myGen = generationRef.current;
+      // Cancelled, unmounted or superseded: whoever bumped the generation
+      // already tore down. Tearing down here could kill a newer recording
+      // (iOS can fire this late, after the user started again).
+      if (gen !== generationRef.current) return;
       const blob = new Blob(myChunks, { type: myMimeType });
       const duration = Math.round(Math.max(0, (Date.now() - startTimeRef.current) / 1000));
       const wasCancelled = cancelledRef.current;
@@ -196,7 +209,6 @@ export function useAudioRecorder({
       setState('idle');
       setLevel(0);
       setElapsedSec(0);
-      if (gen !== myGen) return; // newer recording started, drop this result
       if (!wasCancelled) {
         onCompleteRef.current?.({ blob, mimeType: myMimeType, durationSec: duration });
       }
@@ -254,6 +266,8 @@ export function useAudioRecorder({
     maxTimeoutRef.current = setTimeout(() => {
       // Auto-stop at max duration. onstop will fire with the final blob.
       if (recorderRef.current && recorderRef.current.state === 'recording') {
+        stoppingRef.current = true;
+        setState('stopping');
         recorderRef.current.stop();
       }
     }, Math.min(maxDurationSec, 600) * 1000);
@@ -265,8 +279,13 @@ export function useAudioRecorder({
 
   const stop = useCallback(() => {
     if (recorderRef.current && recorderRef.current.state === 'recording') {
+      stoppingRef.current = true;
       setState('stopping');
       recorderRef.current.stop();
+    } else if (stoppingRef.current) {
+      // Already stopping (a second tap, or an auto-stop): onstop delivers the
+      // memo. Tearing down here would drop it (iOS takes a while to finish).
+      return;
     } else {
       // No active recording — tear down anyway in case we were mid-request.
       generationRef.current++;
@@ -287,10 +306,12 @@ export function useAudioRecorder({
     setElapsedSec(0);
   }, [tearDown]);
 
-  // Unmount cleanup
+  // Unmount cleanup. Not a DOM ref: bumping the value current at unmount is
+  // the point; the local copy only tells the lint rule so.
   useEffect(() => {
+    const generation = generationRef;
     return () => {
-      generationRef.current++;
+      generation.current++;
       cancelledRef.current = true;
       tearDown();
     };

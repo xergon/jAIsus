@@ -18,6 +18,8 @@ interface UseCameraResult {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   /** Toggle camera on/off */
   toggle: () => void;
+  /** Turn the camera off, including one still starting (permission prompt open). Safe when off. */
+  stop: () => void;
   /** Whether camera is supported */
   isSupported: boolean;
   /** Error message if any */
@@ -142,6 +144,9 @@ export function useCamera(): UseCameraResult {
     generationRef.current++;
     activeRef.current = false;
     visionInFlightRef.current = false;
+    // A pending start is now stale (it stops its own stream when it
+    // resolves), so a new start may begin right away.
+    startingRef.current = false;
 
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
@@ -234,7 +239,8 @@ export function useCamera(): UseCameraResult {
         setError('Could not access camera.');
       }
     } finally {
-      startingRef.current = false;
+      // Only our own flag: after a stop, a newer start may own it.
+      if (gen === generationRef.current) startingRef.current = false;
     }
   }, [isSupported, analyzeFrame, stopCamera]);
 
@@ -259,9 +265,14 @@ export function useCamera(): UseCameraResult {
   });
 
   useEffect(() => {
+    // The ref objects themselves, read at unmount on purpose: the counter's
+    // latest value, and the <video> if React hasn't detached it yet (it has
+    // on a real unmount; Fast Refresh keeps the node).
+    const generation = generationRef;
+    const video = videoRef;
     return () => {
       // Bump generation so any pending getUserMedia bails out
-      generationRef.current++;
+      generation.current++;
       activeRef.current = false;
       if (intervalRef.current) clearInterval(intervalRef.current);
       if (firstFrameTimeoutRef.current) clearTimeout(firstFrameTimeoutRef.current);
@@ -272,11 +283,11 @@ export function useCamera(): UseCameraResult {
       // Audit fix: null out the video element's srcObject so the DOM node
       // doesn't keep a stale MediaStream reference after unmount (matters
       // for Fast Refresh / portal-remount paths).
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
+      if (video.current) {
+        video.current.srcObject = null;
       }
     };
   }, []);
 
-  return { isActive, sceneDescription, sceneTimestamp, videoRef, toggle, isSupported, error };
+  return { isActive, sceneDescription, sceneTimestamp, videoRef, toggle, stop: stopCamera, isSupported, error };
 }

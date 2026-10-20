@@ -6,6 +6,7 @@ import { useKeyboardInset } from '@/hooks/useKeyboardInset';
 import { toast } from '@/lib/toast';
 import { track } from '@/lib/analytics';
 import { VOICE_OPTIONS, DEFAULT_VOICE_ID } from '@/lib/constants';
+import { getVoiceOverride } from '@/hooks/useSpeechSynthesis';
 import {
   LIMITS,
   saveCustomPersonality,
@@ -74,6 +75,10 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
   const [desc, setDesc] = useState('');
   const [emoji, setEmoji] = useState('✨');
   const [voiceId, setVoiceId] = useState<string>(DEFAULT_VOICE_ID);
+  // The voice the form started with (the dirty check's baseline): when
+  // editing, the one actually in use — a voice picked in Settings overrides
+  // the saved one.
+  const [startVoiceId, setStartVoiceId] = useState<string>(DEFAULT_VOICE_ID);
   const [systemPrompt, setSystemPrompt] = useState('');
   const [showList, setShowList] = useState(true);
   const [list, setList] = useState<CustomPersonality[]>([]);
@@ -110,7 +115,7 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
     (name !== (original?.name ?? '') ||
       desc !== (original?.desc ?? '') ||
       emoji !== (original?.emoji ?? '✨') ||
-      voiceId !== (original?.voiceId ?? DEFAULT_VOICE_ID) ||
+      voiceId !== (original ? startVoiceId : DEFAULT_VOICE_ID) ||
       systemPrompt !== (original?.systemPrompt ?? ''));
 
   // Backdrop taps and Escape come through here. Closing resets the form, so
@@ -131,12 +136,34 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
   useModalA11y({ isOpen, onClose: requestClose, ref: dialogRef });
   const keyboard = useKeyboardInset(isOpen);
 
-  // Hydrate list on open + subscribe to cross-tab changes.
+  // Read the list on open, and reset the form on close so the next open
+  // starts fresh. Adjusted during render (React's "store info from previous
+  // renders" pattern); the timer is cleared in the effect below.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen);
+    if (isOpen) {
+      setList(listCustomPersonalities());
+    } else {
+      setEditingId(null);
+      setName('');
+      setDesc('');
+      setEmoji('✨');
+      setVoiceId(DEFAULT_VOICE_ID);
+      setStartVoiceId(DEFAULT_VOICE_ID);
+      setSystemPrompt('');
+      setShowList(true);
+      setSubmitting(false);
+      setConfirmingClose(false);
+    }
+  }
+
+  // Keep the list in sync while open (the switcher, or another tab, can
+  // change it).
   // Audit fix: filter the `storage` event by key so unrelated localStorage
   // mutations (e.g. favorites, voice-memos) don't trigger needless refresh.
   useEffect(() => {
     if (!isOpen) return;
-    setList(listCustomPersonalities());
     if (typeof window === 'undefined') return;
     const refresh = () => setList(listCustomPersonalities());
     const onStorage = (e: StorageEvent) => {
@@ -150,22 +177,11 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
     };
   }, [isOpen]);
 
-  // Reset form when the modal closes so the next open starts fresh.
   useEffect(() => {
-    if (!isOpen) {
-      setEditingId(null);
-      setName('');
-      setDesc('');
-      setEmoji('✨');
-      setVoiceId(DEFAULT_VOICE_ID);
-      setSystemPrompt('');
-      setShowList(true);
-      setSubmitting(false);
-      setConfirmingClose(false);
-      if (closeConfirmTimerRef.current) {
-        clearTimeout(closeConfirmTimerRef.current);
-        closeConfirmTimerRef.current = null;
-      }
+    if (isOpen) return;
+    if (closeConfirmTimerRef.current) {
+      clearTimeout(closeConfirmTimerRef.current);
+      closeConfirmTimerRef.current = null;
     }
   }, [isOpen]);
 
@@ -176,17 +192,21 @@ export function PersonalityCreator({ isOpen, onClose, onSaved, onDeleted }: Pers
     setDesc('');
     setEmoji('✨');
     setVoiceId(DEFAULT_VOICE_ID);
+    setStartVoiceId(DEFAULT_VOICE_ID);
     setSystemPrompt('');
     setShowList(false);
   }
 
   function startEdit(p: CustomPersonality) {
     focusNewViewRef.current = focusIsFromKeyboard();
+    // Show the voice in use: Settings keeps a per-personality override.
+    const voice = getVoiceOverride(p.id) ?? p.voiceId;
     setEditingId(p.id);
     setName(p.name);
     setDesc(p.desc);
     setEmoji(p.emoji);
-    setVoiceId(p.voiceId);
+    setVoiceId(voice);
+    setStartVoiceId(voice);
     setSystemPrompt(p.systemPrompt);
     setShowList(false);
   }

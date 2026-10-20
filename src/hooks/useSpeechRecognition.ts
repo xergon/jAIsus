@@ -49,8 +49,12 @@ interface SpeechRecognitionHookResult {
 
 // Once the user has started talking, listening ends after this much silence.
 const SILENCE_MS = 4500;
-// With no speech at all, listening gives up after this long.
+// With no speech at all, listening gives up after this long. Counted from when
+// the mic actually starts listening, not from start(): a first-time
+// permission prompt can take longer than this to answer.
 const NO_SPEECH_MS = 10000;
+// Fallback until then, for a prompt left open or a browser without 'start'.
+const START_WAIT_MS = 60000;
 
 const ERROR_MESSAGES: Record<string, string> = {
   'not-allowed': 'Microphone access denied. Please allow microphone access in your browser settings.',
@@ -131,6 +135,11 @@ export function useSpeechRecognition(
     let quickEnds = 0;
     let silenceTimer: ReturnType<typeof setTimeout> | undefined;
     let restartTimer: ReturnType<typeof setTimeout> | undefined;
+    let noSpeechTimer: ReturnType<typeof setTimeout> | undefined;
+    // The NO_SPEECH_MS window is armed on the first session's start only:
+    // re-arming on every browser-ended restart would keep a silent listen
+    // (and the hands-free mic) open forever.
+    let noSpeechArmed = false;
 
     const heard = () => joinText(committed, sessionText);
 
@@ -166,6 +175,11 @@ export function useSpeechRecognition(
       silenceTimer = setTimeout(() => finish('submit'), SILENCE_MS);
     }
 
+    function armNoSpeechTimer(ms: number) {
+      clearTimeout(noSpeechTimer);
+      noSpeechTimer = setTimeout(() => { if (!heardSpeech) finish('submit'); }, ms);
+    }
+
     function startSession() {
       if (done) return;
       const rec = new SpeechRecognition!();
@@ -176,7 +190,13 @@ export function useSpeechRecognition(
       rec.interimResults = true;
       rec.lang = 'en-US';
 
-      rec.onstart = () => { sessionStartedAt = Date.now(); };
+      rec.onstart = () => {
+        sessionStartedAt = Date.now();
+        if (!noSpeechArmed && !heardSpeech) {
+          noSpeechArmed = true;
+          armNoSpeechTimer(NO_SPEECH_MS);
+        }
+      };
 
       rec.onresult = (event) => {
         if (rec !== recognition) return;
@@ -246,7 +266,7 @@ export function useSpeechRecognition(
 
     const handle = { finish: (mode: 'submit' | 'cancel') => finish(mode) };
     listenRef.current = handle;
-    const noSpeechTimer = setTimeout(() => { if (!heardSpeech) finish('submit'); }, NO_SPEECH_MS);
+    armNoSpeechTimer(START_WAIT_MS);
     setError(null);
     setTranscript('');
     setInterimTranscript('');

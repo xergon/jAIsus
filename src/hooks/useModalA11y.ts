@@ -109,11 +109,13 @@ export function useModalA11y({ isOpen, onClose, ref }: UseModalA11yOptions) {
     const token = {};
     modalStack.push(token);
 
-    // Move focus into the modal on open (first focusable element). Drawers
-    // that fade in from `invisible` aren't focusable on the first frame, so
-    // try once more shortly after.
+    // Move focus into the modal on open: an element marked `data-autofocus`
+    // (e.g. Search's input), else the first focusable one. Drawers that fade
+    // in from `invisible` aren't focusable on the first frame, so try once
+    // more shortly after.
     const focusFirst = () => {
-      getFocusable(root)[0]?.focus();
+      const preferred = root.querySelector<HTMLElement>('[data-autofocus]');
+      (preferred && isReachable(preferred) ? preferred : getFocusable(root)[0])?.focus();
       return root.contains(document.activeElement);
     };
     const retryTimer = focusFirst() ? undefined : window.setTimeout(focusFirst, 50);
@@ -123,6 +125,9 @@ export function useModalA11y({ isOpen, onClose, ref }: UseModalA11yOptions) {
       // A control inside the modal (e.g. the Export menu) already handled it.
       if (e.defaultPrevented) return;
       if (e.key === 'Escape') {
+        // Escape that cancels IME composition (e.g. in PersonalityCreator's
+        // textarea) belongs to the input method, not the dialog.
+        if (e.isComposing) return;
         e.preventDefault();
         onCloseRef.current();
         return;

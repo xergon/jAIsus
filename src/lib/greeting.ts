@@ -33,6 +33,8 @@ interface Candidate {
   /**
    * Sublines indexed by day of week (0 = Sunday, 6 = Saturday). Provide all
    * seven so the pool stays balanced and the per-day rotation feels intentional.
+   * Late-night (00:00–04:59) sublines are indexed by the evening the night
+   * belongs to: 1am on Monday reads the Sunday line.
    */
   sublines: [string, string, string, string, string, string, string];
 }
@@ -362,9 +364,13 @@ export function getGreeting(date?: Date): Greeting {
   const candidateIndex = (dayOfYearLocal(d) + day) % pool.length;
   const candidate = pool[candidateIndex];
 
+  // After midnight it's still the previous day's night for the user.
+  // (day + 6) % 7, not day - 1: Sunday (0) would index -1.
+  const subDay = timeOfDay === 'late-night' ? (day + 6) % 7 : day;
+
   return {
     headline: candidate.headline,
-    subline: candidate.sublines[day],
+    subline: candidate.sublines[subDay],
     timeOfDay,
   };
 }

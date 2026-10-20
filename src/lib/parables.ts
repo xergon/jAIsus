@@ -170,7 +170,7 @@ export const parables: Parable[] = [
     summary: 'A man knocks on a friend\'s door at midnight asking for bread; persistence wins him what he needs, teaching us to ask, seek, and knock in prayer.',
     fullText: 'Suppose you have a friend, and you go to him at midnight and say, "Friend, lend me three loaves of bread; a friend of mine on a journey has come to me, and I have no food to offer him." And suppose the one inside answers, "Don\'t bother me. The door is already locked, and my children and I are in bed. I can\'t get up and give you anything." I tell you, even though he will not get up and give you the bread because of friendship, yet because of your shameless audacity he will surely get up and give you as much as you need. So I say to you: Ask and it will be given to you; seek and you will find; knock and the door will be opened to you.',
     themes: ['prayer', 'perseverance', 'faith', 'trust'],
-    suggestPrompt: 'What does this parable teach about being bold and persistent in prayer?',
+    suggestPrompt: 'What does the parable of the Friend at Midnight teach about being bold and persistent in prayer?',
   },
   {
     id: 'two-sons',
@@ -251,7 +251,7 @@ export const parables: Parable[] = [
     summary: 'A landowner pays workers hired late in the day the same as those who worked all day — a startling picture of God\'s generous grace.',
     fullText: 'The kingdom of heaven is like a landowner who went out early in the morning to hire workers for his vineyard. He agreed to pay them a denarius for the day and sent them into his vineyard. About nine in the morning he went out and saw others standing in the marketplace doing nothing. He told them, "You also go and work in my vineyard, and I will pay you whatever is right." So they went. He went out again about noon and about three in the afternoon and did the same thing. About five in the afternoon he went out and found still others standing around. When evening came, the owner of the vineyard called those who were hired last and paid each a denarius. When those came who were hired first, they expected to receive more. But each one of them also received a denarius. So they began to grumble against the landowner.',
     themes: ['grace', 'generosity', 'humility', 'mercy'],
-    suggestPrompt: 'Why does God\'s generosity in this parable feel unfair, and what does that reveal about us?',
+    suggestPrompt: 'Why does God\'s generosity in the parable of the Workers in the Vineyard feel unfair, and what does that reveal about us?',
   },
   {
     id: 'two-debtors',
@@ -386,7 +386,7 @@ export const parables: Parable[] = [
     summary: 'An evil spirit cast out of a person returns to find the house swept clean but empty, then brings worse spirits with it — a warning that goodness must be filled, not just emptied.',
     fullText: 'When an impure spirit comes out of a person, it goes through arid places seeking rest and does not find it. Then it says, "I will return to the house I left." When it arrives, it finds the house unoccupied, swept clean and put in order. Then it goes and takes with it seven other spirits more wicked than itself, and they go in and live there. And the final condition of that person is worse than the first. That is how it will be with this wicked generation.',
     themes: ['wisdom', 'readiness', 'faithfulness', 'foundation'],
-    suggestPrompt: 'Why is it not enough to empty out the bad? What needs to fill the space?',
+    suggestPrompt: 'In the parable of the Unclean Spirit Returns, why is it not enough to empty out the bad? What needs to fill the space?',
   },
   {
     id: 'children-in-the-marketplace',
@@ -395,16 +395,18 @@ export const parables: Parable[] = [
     summary: 'Like children calling out that no one will play their tune, Jesus says this generation rejects both John\'s fasting and his own feasting — never satisfied, no matter how God comes.',
     fullText: 'To what, then, can I compare the people of this generation? What are they like? They are like children sitting in the marketplace and calling out to each other: "We played the pipe for you, and you did not dance; we sang a dirge, and you did not cry." For John the Baptist came neither eating bread nor drinking wine, and you say, "He has a demon." The Son of Man came eating and drinking, and you say, "Here is a glutton and a drunkard, a friend of tax collectors and sinners." But wisdom is proved right by all her children.',
     themes: ['wisdom', 'humility', 'invitation', 'repentance'],
-    suggestPrompt: 'Why do people often reject God no matter how he shows up?',
+    suggestPrompt: 'What does the parable of the Children in the Marketplace say about why people often reject God no matter how he shows up?',
   },
   {
-    id: 'tower-and-king',
-    title: 'The Tower and the King at War',
-    reference: 'Luke 14:28-32',
-    summary: 'A builder estimates the cost of a tower, and a king weighs his army before going to war — wisdom thinks before it acts.',
-    fullText: 'Suppose one of you wants to build a tower. Won\'t you first sit down and estimate the cost to see if you have enough money to complete it? For if you lay the foundation and are not able to finish it, everyone who sees it will ridicule you. Or suppose a king is about to go to war against another king. Won\'t he first sit down and consider whether he is able with ten thousand men to oppose the one coming against him with twenty thousand? If he is not able, he will send a delegation while the other is still a long way off and will ask for terms of peace.',
-    themes: ['wisdom', 'priorities', 'foundation', 'faithfulness'],
-    suggestPrompt: 'How does this parable help us think before making big decisions?',
+    // Replaces 'The Tower and the King at War' (Luke 14:28-32), which repeated
+    // 'Counting the Cost'. Text: World English Bible (public domain).
+    id: 'places-of-honor',
+    title: 'The Places of Honor',
+    reference: 'Luke 14:7-11',
+    summary: 'At a wedding feast, Jesus tells the guests not to claim the best seats but to take the lowest place — whoever humbles himself will be exalted.',
+    fullText: 'When you are invited by anyone to a wedding feast, don\'t sit in the best seat, since perhaps someone more honorable than you might be invited by him, and he who invited both of you would come and tell you, "Make room for this person." Then you would begin, with shame, to take the lowest place. But when you are invited, go and sit in the lowest place, so that when he who invited you comes, he may tell you, "Friend, move up higher." Then you will be honored in the presence of all who sit at the table with you. For everyone who exalts himself will be humbled, and whoever humbles himself will be exalted.',
+    themes: ['humility', 'invitation', 'grace', 'wisdom'],
+    suggestPrompt: 'What does the parable of the Places of Honor teach about humility and where we seat ourselves?',
   },
   {
     id: 'wheat-and-weeds',
@@ -413,7 +415,7 @@ export const parables: Parable[] = [
     summary: 'An enemy sows weeds among the wheat; the owner lets them grow together until the harvest, when they will be separated — a picture of patience and final judgment.',
     fullText: 'The kingdom of heaven is like a man who sowed good seed in his field. But while everyone was sleeping, his enemy came and sowed weeds among the wheat, and went away. When the wheat sprouted and formed heads, then the weeds also appeared. The owner\'s servants came to him and said, "Sir, didn\'t you sow good seed in your field? Where then did the weeds come from?" "An enemy did this," he replied. The servants asked him, "Do you want us to go and pull them up?" "No," he answered, "because while you are pulling the weeds, you may uproot the wheat with them. Let both grow together until the harvest. At that time I will tell the harvesters: First collect the weeds and tie them in bundles to be burned; then gather the wheat and bring it into my barn."',
     themes: ['patience', 'wisdom', 'trust', 'hope'],
-    suggestPrompt: 'Why does God let good and evil grow together for now?',
+    suggestPrompt: 'In the parable of the Wheat and the Weeds, why does God let good and evil grow together for now?',
   },
   {
     id: 'doorkeeper',
@@ -422,7 +424,7 @@ export const parables: Parable[] = [
     summary: 'A man leaves on a journey and tells his doorkeeper to keep watch — for no one knows when the master will return.',
     fullText: 'Be on guard! Be alert! You do not know when that time will come. It\'s like a man going away: He leaves his house and puts his servants in charge, each with their assigned task, and tells the one at the door to keep watch. Therefore keep watch because you do not know when the owner of the house will come back — whether in the evening, or at midnight, or when the rooster crows, or at dawn. If he comes suddenly, do not let him find you sleeping. What I say to you, I say to everyone: Watch!',
     themes: ['readiness', 'faithfulness', 'wisdom', 'stewardship'],
-    suggestPrompt: 'What does it mean to keep watch in everyday life?',
+    suggestPrompt: 'What does the parable of the Watchful Doorkeeper teach about keeping watch in everyday life?',
   },
   {
     id: 'birds-and-lilies',

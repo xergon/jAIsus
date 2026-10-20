@@ -50,7 +50,48 @@ function generateId(): string {
   return `mem-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// What useConversationMemory renders (via useSyncExternalStore): the same
+// array until memories change, so React can compare snapshots by reference.
+// Dropped on every write below and on writes from other tabs.
+let snapshot: ConversationMemory[] | null = null;
+const EMPTY: ConversationMemory[] = [];
+
+if (typeof window !== 'undefined') {
+  // Registered at load, before any component subscribes, so the snapshot is
+  // already dropped when React re-reads it.
+  window.addEventListener('storage', e => {
+    if (e.key === STORAGE_KEY || e.key === null) snapshot = null;
+  });
+}
+
+/** useSyncExternalStore snapshot: memories, newest first. */
+export function getMemoriesSnapshot(): ConversationMemory[] {
+  return (snapshot ??= listMemories());
+}
+
+/** useSyncExternalStore server snapshot: storage isn't readable there. */
+export function getServerMemoriesSnapshot(): ConversationMemory[] {
+  return EMPTY;
+}
+
+/** useSyncExternalStore subscribe: this tab's changes and other tabs'. */
+export function subscribeMemories(onChange: () => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const onStorage = (e: StorageEvent) => {
+    if (e.key !== STORAGE_KEY && e.key !== null) return;
+    snapshot = null;
+    onChange();
+  };
+  window.addEventListener(CHANGE_EVENT, onChange);
+  window.addEventListener('storage', onStorage);
+  return () => {
+    window.removeEventListener(CHANGE_EVENT, onChange);
+    window.removeEventListener('storage', onStorage);
+  };
+}
+
 function emitChange(): void {
+  snapshot = null;
   if (typeof window === 'undefined') return;
   try {
     window.dispatchEvent(new CustomEvent(CHANGE_EVENT));

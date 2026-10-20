@@ -81,13 +81,8 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${lora.variable} h-full antialiased`}>
       <head>
-        {/* Preload only the FIRST hero video so the browser fetches it during
-            HTML parse, BEFORE React hydrates. Audit fix: was preloading both
-            videos, which front-ran the LCP fetch with two MP4s; the second
-            file isn't needed until the user is in 'speaking' state and the
-            browser will fetch it on demand fast enough. */}
-        <link rel="preload" as="video" href="/jaisus-embraces.mp4" type="video/mp4" />
-        <link rel="prefetch" as="video" href="/jaisus-prays.mp4" type="video/mp4" />
+        {/* No video preload links: browsers don't support `as="video"`
+            (console warning, ignored). AnimatedJesus loads the first clip. */}
         {/* Audit fix: removed dead `<meta http-equiv="Cache-Control" ...>` and
             its Pragma/Expires siblings. The HTML spec doesn't honor those
             http-equiv tags for caching — only Content-Type, default-style,

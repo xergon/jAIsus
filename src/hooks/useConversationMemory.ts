@@ -1,17 +1,16 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import {
   type ConversationMemory,
   addMemory,
   clearMemories as clearAllMemories,
-  listMemories,
+  getMemoriesSnapshot,
+  getServerMemoriesSnapshot,
   removeMemory as removeOneMemory,
+  subscribeMemories,
 } from '@/lib/conversation-memory';
 import type { UIMessage } from 'ai';
-
-const CHANGE_EVENT = 'jaisus-memories-changed';
-const STORAGE_KEY = 'jaisus-memories';
 
 /** Lower bounds for "worth summarizing" — skip trivial exchanges. */
 const MIN_MESSAGES = 2;
@@ -37,8 +36,8 @@ function extractText(msg: UIMessage): string {
 /**
  * React hook over the conversation-memory lib.
  *
- * - `memories` is empty during SSR and on first render; hydrated in an
- *   effect to avoid hydration mismatches.
+ * - `memories` is empty during SSR and the hydration render (server
+ *   snapshot), then follows localStorage — no hydration mismatch.
  * - Subscribes to `jaisus-memories-changed` so all mounted instances stay
  *   in sync after a mutation anywhere in the tree.
  * - Also listens to the cross-tab `storage` event.
@@ -50,30 +49,11 @@ function extractText(msg: UIMessage): string {
  * we never want to interrupt the user with a failed background save.
  */
 export function useConversationMemory() {
-  const [memories, setMemories] = useState<ConversationMemory[]>([]);
-
-  const refresh = useCallback(() => {
-    setMemories(listMemories());
-  }, []);
-
-  useEffect(() => {
-    // Initial hydrate after mount (avoids SSR mismatch).
-    refresh();
-
-    if (typeof window === 'undefined') return;
-
-    const onChange = () => refresh();
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY || e.key === null) refresh();
-    };
-
-    window.addEventListener(CHANGE_EVENT, onChange);
-    window.addEventListener('storage', onStorage);
-    return () => {
-      window.removeEventListener(CHANGE_EVENT, onChange);
-      window.removeEventListener('storage', onStorage);
-    };
-  }, [refresh]);
+  const memories = useSyncExternalStore(
+    subscribeMemories,
+    getMemoriesSnapshot,
+    getServerMemoriesSnapshot
+  );
 
   const summarizeAndSave = useCallback(
     async (

@@ -35,11 +35,29 @@
 
 import crypto from 'crypto';
 import { getDailyVerse } from '@/lib/daily-verse';
-import { listSubscriptions, removeSubscription } from '@/lib/push-server';
+import { isAllowedPushEndpoint, listSubscriptions, removeSubscription } from '@/lib/push-server';
 
 // Web Push fan-out can take a while if there are many subs; allow up to 60s.
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
+
+// public/sw.js (sanitizePushPayload) shows no body longer than this —
+// keep the two in sync. Measured in UTF-16 units, like the SW's .length.
+const PUSH_BODY_MAX = 300;
+
+// Per push-service request. Well under maxDuration, so one slow (or
+// hostile) endpoint is counted as failed instead of timing out the cron.
+const PUSH_FETCH_TIMEOUT_MS = 10_000;
+
+/** "<verse> — <reference>", the verse shortened with … to fit PUSH_BODY_MAX. */
+function verseBody(text: string, reference: string): string {
+  const suffix = reference ? ` — ${reference}` : '';
+  if (text.length + suffix.length <= PUSH_BODY_MAX) return text + suffix;
+  // Longer verses (1 Corinthians 13:4-7 is 343 chars) used to be dropped by
+  // the SW in favour of "A new verse for today." Verse data is BMP-only, so
+  // slicing can't split a surrogate pair.
+  return text.slice(0, PUSH_BODY_MAX - suffix.length - 1).trimEnd() + '…' + suffix;
+}
 
 // ---------- base64url helpers ----------
 
@@ -291,7 +309,7 @@ export async function GET(req: Request) {
   const payload = Buffer.from(
     JSON.stringify({
       title: 'Today’s verse',
-      body: `${verse.text} — ${verse.reference}`,
+      body: verseBody(verse.text, verse.reference),
       url: '/',
     })
   );
@@ -307,8 +325,25 @@ export async function GET(req: Request) {
         result.failed++;
         return;
       }
+      // Entries stored before the subscribe route checked the host (or
+      // with keys that can't be encrypted for) can never work: drop them
+      // rather than POSTing to an arbitrary URL or failing every day.
+      // Only these permanent errors remove an entry; network failures
+      // below are transient and keep it.
+      let body: Buffer;
       try {
-        const body = encryptPayload(payload, sub.keys.p256dh, sub.keys.auth);
+        if (!isAllowedPushEndpoint(sub.endpoint)) throw new Error('endpoint not allowed');
+        body = encryptPayload(payload, sub.keys.p256dh, sub.keys.auth);
+      } catch {
+        try {
+          await removeSubscription(sub.endpoint);
+          result.removed++;
+        } catch {
+          result.failed++;
+        }
+        return;
+      }
+      try {
         const authHeader = buildVapidAuth(sub.endpoint, publicKey, privateKey, subject);
 
         const res = await fetch(sub.endpoint, {
@@ -321,6 +356,9 @@ export async function GET(req: Request) {
             Urgency: 'normal',
           },
           body: body as unknown as BodyInit,
+          // Push services answer directly; never follow a redirect elsewhere.
+          redirect: 'error',
+          signal: AbortSignal.timeout(PUSH_FETCH_TIMEOUT_MS),
         });
 
         if (res.status === 201 || res.status === 202 || res.status === 200) {

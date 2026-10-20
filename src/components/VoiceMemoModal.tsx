@@ -32,7 +32,10 @@ type ScreenState =
   | { kind: 'recording' }
   | { kind: 'processing'; durationSec: number }
   | { kind: 'result'; durationSec: number; reflection: Reflection }
-  | { kind: 'error'; message: string };
+  /** canRetry: the recording is kept and can be sent again. */
+  | { kind: 'error'; message: string; canRetry?: boolean };
+
+type Recording = { blob: Blob; mimeType: string; durationSec: number };
 
 function fmtTime(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -80,7 +83,12 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
   useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
   useEffect(() => { onStopSpeakingRef.current = onStopSpeaking; }, [onStopSpeaking]);
 
-  const submitRecording = useCallback(async (result: { blob: Blob; mimeType: string; durationSec: number }) => {
+  // The recording being processed, kept until it succeeds so a network or
+  // server failure doesn't throw away minutes of audio.
+  const lastRecordingRef = useRef<Recording | null>(null);
+
+  const submitRecording = useCallback(async (result: Recording) => {
+    lastRecordingRef.current = result;
     setScreen({ kind: 'processing', durationSec: result.durationSec });
     try {
       const audioBase64 = await blobToBase64(result.blob);
@@ -99,10 +107,15 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
           const errBody = await resp.json();
           if (typeof errBody?.error === 'string') msg = errBody.error;
         } catch { /* response might be HTML on hard 500 */ }
-        setScreen({ kind: 'error', message: msg });
+        // Rate limits and server errors can pass; a bad, too long or silent
+        // recording (400/413/415/422) would fail the same way again.
+        const canRetry = resp.status === 429 || resp.status >= 500;
+        if (!canRetry) lastRecordingRef.current = null;
+        setScreen({ kind: 'error', message: msg, canRetry });
         return;
       }
       const data = (await resp.json()) as Reflection;
+      lastRecordingRef.current = null;
       setScreen({
         kind: 'result',
         durationSec: result.durationSec,
@@ -117,7 +130,7 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
       vibrate('success');
     } catch (err) {
       if ((err as Error)?.name === 'AbortError') return; // user closed
-      setScreen({ kind: 'error', message: 'Network hiccup. Try again?' });
+      setScreen({ kind: 'error', message: 'Network hiccup. Try again?', canRetry: true });
     }
   }, [vibrate]);
 
@@ -141,6 +154,7 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
     const atStake =
       screen.kind === 'processing' ||
       screen.kind === 'result' ||
+      (screen.kind === 'error' && screen.canRetry === true) ||
       (screen.kind === 'recording' && recorder.elapsedSec >= 30);
     if (atStake && !confirmingClose) {
       vibrate('warning');
@@ -150,7 +164,9 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
           ? "This reflection isn't saved. Close again to discard it."
           : screen.kind === 'processing'
             ? 'jAIsus is still reflecting. Close again to discard this memo.'
-            : 'Still recording. Close again to discard it.',
+            : screen.kind === 'error'
+              ? "This memo wasn't sent. Close again to discard it."
+              : 'Still recording. Close again to discard it.',
         { duration: 3000 }
       );
       if (closeConfirmTimerRef.current) clearTimeout(closeConfirmTimerRef.current);
@@ -168,29 +184,42 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
   // transient 'requesting'/'recording' window. If the user dismisses the
   // mic permission prompt, the hook returns to 'idle' and we want the modal
   // to follow — otherwise we'd be stuck showing the recording UI for a
-  // recording that never began (audit C1).
-  useEffect(() => {
-    if (!isOpen) return;
-    if (screen.kind !== 'recording') return;
-    // If the recorder dropped back to idle (permission denied, mic in use,
-    // or any sync error in the hook), unstick the modal.
-    if (recorder.state === 'idle') {
-      setScreen({ kind: 'idle' });
-    }
-  }, [recorder.state, screen.kind, isOpen]);
+  // recording that never began (audit C1). Adjusted during render.
+  // If the recorder dropped back to idle (permission denied, mic in use,
+  // or any sync error in the hook), unstick the modal.
+  if (isOpen && screen.kind === 'recording' && recorder.state === 'idle') {
+    setScreen({ kind: 'idle' });
+  }
 
-  // Reset state every time the modal CLOSES. Depends only on isOpen so it
-  // doesn't fire 60× per second during recording (audit H1).
+  // Reset state every time the modal CLOSES (adjusted during render; the
+  // recorder, request, speech and timers are stopped in the effect below).
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen);
+    if (!isOpen) {
+      setScreen({ kind: 'idle' });
+      setConfirmingCancel(false);
+      setConfirmingClose(false);
+    }
+  }
+
+  // Back to the first reassurance line whenever the screen changes (the
+  // effect below advances it while processing).
+  const [hintScreen, setHintScreen] = useState(screen.kind);
+  if (screen.kind !== hintScreen) {
+    setHintScreen(screen.kind);
+    setProcessingHint(0);
+  }
+
+  // Depends only on isOpen so it doesn't fire 60× per second during
+  // recording (audit H1).
   useEffect(() => {
     if (isOpen) return;
     abortRef.current?.abort();
     abortRef.current = null;
+    lastRecordingRef.current = null;
     if (recorderRef.current.state !== 'idle') recorderRef.current.cancel();
     if (isSpeakingRef.current) onStopSpeakingRef.current();
-    setScreen({ kind: 'idle' });
-    setConfirmingCancel(false);
-    setConfirmingClose(false);
-    setProcessingHint(0);
     if (cancelConfirmTimerRef.current) {
       clearTimeout(cancelConfirmTimerRef.current);
       cancelConfirmTimerRef.current = null;
@@ -205,10 +234,7 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
   // the request hung. Tied to screen.kind so it resets cleanly when we
   // leave the processing state.
   useEffect(() => {
-    if (screen.kind !== 'processing') {
-      setProcessingHint(0);
-      return;
-    }
+    if (screen.kind !== 'processing') return;
     const t6 = setTimeout(() => setProcessingHint(1), 6_000);
     const t20 = setTimeout(() => setProcessingHint(2), 20_000);
     return () => {
@@ -235,10 +261,17 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
   // On iOS, opening the modal while the chat textarea is focused leaves the
   // keyboard up — and since the modal slides up to `items-end`, it ends up
   // BEHIND the keyboard. Blur the active element when we open (audit UX H3).
+  // Only when it's outside the dialog: useModalA11y has usually moved focus
+  // to Start already (which closes the keyboard too), and blurring that
+  // dropped keyboard and screen-reader focus onto <body>.
   useEffect(() => {
     if (!isOpen) return;
     const active = document.activeElement;
-    if (active instanceof HTMLElement && active !== document.body) {
+    if (
+      active instanceof HTMLElement &&
+      active !== document.body &&
+      !dialogRef.current?.contains(active)
+    ) {
       active.blur();
     }
   }, [isOpen]);
@@ -317,6 +350,21 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
     } else {
       toast.error("Couldn't save — storage may be full.");
     }
+  };
+
+  const handleRetry = () => {
+    const recording = lastRecordingRef.current;
+    if (!recording) {
+      setScreen({ kind: 'idle' });
+      return;
+    }
+    vibrate('tap');
+    void submitRecording(recording);
+  };
+
+  const handleStartOver = () => {
+    lastRecordingRef.current = null;
+    setScreen({ kind: 'idle' });
   };
 
   const handleDiscard = () => {
@@ -559,15 +607,30 @@ export function VoiceMemoModal({ isOpen, onClose, onSpeak, onStopSpeaking, isSpe
             <div className="flex flex-col items-center justify-center py-12 gap-4 text-center">
               <div className="text-4xl" aria-hidden="true">⚠️</div>
               <p className="text-sm text-stone-700 max-w-xs">{screen.message}</p>
-              {/* "Start over" is clearer than "Try again" — the previous
-                  recording is gone; this returns to the idle screen (audit UX L2). */}
-              <button
-                type="button"
-                onClick={() => setScreen({ kind: 'idle' })}
-                className="rounded-xl bg-teal-500 text-white px-5 py-2.5 text-sm font-medium active:scale-[0.98]"
-              >
-                Start over
-              </button>
+              {/* "Try again" re-sends the kept recording; "Start over" drops it
+                  and returns to the idle screen (audit UX L2). */}
+              <div className="flex gap-3">
+                {screen.canRetry && (
+                  <button
+                    type="button"
+                    onClick={handleRetry}
+                    className="rounded-xl bg-teal-500 text-white px-5 py-2.5 text-sm font-medium active:scale-[0.98]"
+                  >
+                    Try again
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleStartOver}
+                  className={
+                    screen.canRetry
+                      ? 'rounded-xl border border-stone-200 px-5 py-2.5 text-sm font-medium text-stone-600 active:scale-[0.98]'
+                      : 'rounded-xl bg-teal-500 text-white px-5 py-2.5 text-sm font-medium active:scale-[0.98]'
+                  }
+                >
+                  Start over
+                </button>
+              </div>
             </div>
           )}
         </div>

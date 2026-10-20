@@ -66,6 +66,11 @@ export function setVoiceOverride(personalityId: string, voiceId: string | null) 
 let audioUnlocked = false;
 let persistentCtx: AudioContext | null = null;
 let warmAudio: HTMLAudioElement | null = null;
+// iOS only lets speechSynthesis talk after a speak() made during a tap, so the
+// browser-voice fallback would stay silent without this one-time prime.
+let speechPrimed = false;
+// Kept referenced so the prime utterance isn't garbage-collected mid-speak.
+let primeUtterance: SpeechSynthesisUtterance | null = null;
 
 function getAudioContext(): AudioContext {
   if (!persistentCtx) {
@@ -88,13 +93,47 @@ const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAI
 // can refuse a play() started from it.
 const UNLOCK_EVENTS = ['touchend', 'click', 'keydown'];
 
+// The gesture listeners stay until both the audio element and speech are unlocked.
+function removeUnlockListenersIfDone() {
+  if (!audioUnlocked || !speechPrimed) return;
+  UNLOCK_EVENTS.forEach(e => document.removeEventListener(e, unlockAudio, true));
+}
+
 function markAudioUnlocked() {
   audioUnlocked = true;
-  UNLOCK_EVENTS.forEach(e => document.removeEventListener(e, unlockAudio, true));
+  removeUnlockListenersIfDone();
+}
+
+// Speaks a silent utterance during a real user gesture (see speechPrimed).
+// Never cancel() here: a tap during browser-voice playback would cut it off.
+function primeSpeech() {
+  if (speechPrimed) return;
+  if (!window.speechSynthesis) {
+    speechPrimed = true; // nothing to prime
+    removeUnlockListenersIfDone();
+    return;
+  }
+  // Outside a gesture the prime would be wasted; the next gesture retries.
+  const activation = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
+  if (activation && !activation.isActive) return;
+  speechPrimed = true;
+  removeUnlockListenersIfDone();
+  try {
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    primeUtterance = u;
+    u.onend = u.onerror = () => { if (primeUtterance === u) primeUtterance = null; };
+    window.speechSynthesis.speak(u);
+  } catch {
+    // Ignore — best effort
+  }
 }
 
 // Retried on every gesture until the warm element has actually played once.
 function unlockAudio() {
+  // Before the early return, so a speak() started from a tap still primes
+  // speech after the audio element is already unlocked.
+  primeSpeech();
   if (audioUnlocked) return;
 
   // Resume the persistent AudioContext
@@ -183,6 +222,10 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
   const queueRef = useRef<SpeechChunk[]>([]);
   const queueActiveRef = useRef(false);
   const streamDoneRef = useRef(false);
+  // Set once ElevenLabs fails during a processQueue run: the rest of that run
+  // uses the browser voice, so nothing more is fetched (each fetch is billed).
+  // Reset at the start of every run, so each new reply tries ElevenLabs again.
+  const premiumDownRef = useRef(false);
   // Audit fix: playback generation counter so a stop() during an in-flight
   // playBlob can short-circuit the pending promise immediately rather
   // than waiting for the 30s safety timeout. Every stop() bumps it.
@@ -296,6 +339,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
   // eleven_v3 voices take 2-3 s per sentence; without this lookahead each
   // sentence would wait for the previous one to finish playing.
   const prefetchNext = useCallback(() => {
+    if (premiumDownRef.current) return;
     const next = queueRef.current[0];
     if (next && !next.audio) next.audio = fetchAudio(next.text);
   }, [fetchAudio]);
@@ -384,6 +428,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
     if (warmAudioOwner && warmAudioOwner.id !== playbackGenRef) warmAudioOwner.stop();
     warmAudioOwner = { id: playbackGenRef, stop };
     queueActiveRef.current = true;
+    premiumDownRef.current = false;
     setIsSpeaking(true);
     console.log('processQueue: started');
     // Snapshot generation so stop() bumps it and we exit on next loop iteration.
@@ -398,10 +443,6 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
       pendingResolversRef.current.add(finish);
       speakWithBrowser(text, finish, cancelled);
     });
-    // Once ElevenLabs fails, the rest of this run uses the browser voice
-    // rather than switching voices sentence by sentence.
-    let premiumDown = false;
-
     try {
       while (true) {
         // Audit: bail immediately if stop() was called.
@@ -413,7 +454,9 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
           const chunk = queueRef.current.shift()!;
           console.log('processQueue: playing sentence:', chunk.text.slice(0, 50));
           let result: PlayResult = 'failed';
-          if (!premiumDown) {
+          // Once ElevenLabs fails, the rest of this run uses the browser voice
+          // rather than switching voices sentence by sentence.
+          if (!premiumDownRef.current) {
             const audio = chunk.audio ?? fetchAudio(chunk.text);
             prefetchNext();
             const blob = await audio;
@@ -421,7 +464,13 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
             if (blob) {
               result = await playBlob(blob, myGen);
             } else {
-              premiumDown = true;
+              // Set only after the cancelled() check, so a run stop() ended
+              // can't set it for the run that replaced it.
+              premiumDownRef.current = true;
+              // Cancel the prefetch in flight (the route forwards the abort
+              // to ElevenLabs). fetchAudio makes a new controller next run.
+              abortRef.current?.abort();
+              abortRef.current = null;
               notifyPremiumVoiceDown();
             }
             console.log('processQueue: sentence done:', result);
@@ -514,7 +563,8 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
  * of up to ~220 characters.
  */
 function chunkForSpeech(text: string): string[] {
-  const sentences = (text.match(/[^.!?]+(?:[.!?]+["'”’)]*|$)/g) ?? [])
+  // A "." between digits ("3.5", "$4.99") doesn't end a sentence.
+  const sentences = (text.match(/(?:[^.!?]|\.(?=\d))+(?:[.!?]+["'”’)]*|$)/g) ?? [])
     .map(s => s.trim())
     .filter(Boolean);
   const chunks: string[] = [];
@@ -621,7 +671,8 @@ function speakWithBrowser(text: string, onEnd: () => void, isCancelled: () => bo
 
   // Chrome sometimes needs a tiny delay after cancel
   setTimeout(() => {
-    if (isCancelled()) {
+    // finished: the watchdog already gave up on this text.
+    if (finished || isCancelled()) {
       finish();
       return;
     }
@@ -639,7 +690,9 @@ function speakWithBrowser(text: string, onEnd: () => void, isCancelled: () => bo
     }
 
     function speakNext() {
-      if (isCancelled() || index >= sentences.length) {
+      // Once the watchdog has given up, the queue has moved on: the rest of
+      // this chain must not speak over the next chunk.
+      if (finished || isCancelled() || index >= sentences.length) {
         finish();
         return;
       }
@@ -652,11 +705,13 @@ function speakWithBrowser(text: string, onEnd: () => void, isCancelled: () => bo
       if (bestVoice) utterance.voice = bestVoice;
 
       utterance.onend = () => {
+        if (finished) return;
         index++;
         speakNext();
       };
 
       utterance.onerror = (e) => {
+        if (finished) return;
         if (!isCancelled()) console.warn('Browser TTS error:', e);
         // Try next sentence instead of giving up entirely
         index++;

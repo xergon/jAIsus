@@ -124,18 +124,30 @@ export function ContextMenu({
     }
   }, [items.length]);
 
+  // Reset when the menu closes, so the next open measures afresh and fades
+  // in again. Done while rendering (React's "adjust state when a prop
+  // changes" pattern) rather than with a setState in the effect below.
+  const open = isOpen && position !== null;
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (!open) {
+      setCoords(null);
+      setAnimateIn(false);
+    }
+  }
+
   // Measure & clamp the menu's position once it's in the DOM. We use
   // useLayoutEffect so the position is applied before the user sees the
   // first paint.
   useLayoutEffect(() => {
-    if (!isOpen || !position || !menuRef.current) {
-      setCoords(null);
-      setAnimateIn(false);
-      return;
-    }
-    const rect = menuRef.current.getBoundingClientRect();
+    const menu = menuRef.current;
+    if (!isOpen || !position || !menu) return;
+    // offsetWidth/Height are the layout size. getBoundingClientRect would
+    // include the scale(0.95) of the open animation, so the full-size menu
+    // ended up a few px past the right/bottom edge.
     setCoords(
-      clampPosition(position, { width: rect.width, height: rect.height })
+      clampPosition(position, { width: menu.offsetWidth, height: menu.offsetHeight })
     );
     // Schedule the transition to start on the next frame so the browser
     // commits the initial (pre-animation) styles first.

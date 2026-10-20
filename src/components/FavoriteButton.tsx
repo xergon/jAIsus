@@ -20,16 +20,17 @@ export function FavoriteButton({
   size = 'sm',
   className = '',
 }: Props) {
-  const { isFavorited, toggle } = useFavorites();
+  const { isFavorited, toggleWithStatus } = useFavorites();
   const favorited = isFavorited(kind, content);
 
   const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     // Don't bubble — these often sit inside larger clickable cards.
     e.stopPropagation();
-    // Capture pre-toggle state so we know which direction we're going.
-    const wasFavorited = favorited;
-    toggle({ kind, content, context });
-    if (wasFavorited) {
+    const { status } = toggleWithStatus({ kind, content, context });
+    if (status === 'failed') {
+      // Storage full or unavailable: say so instead of a false "Saved".
+      toast.error("Couldn't save — storage unavailable");
+    } else if (status === 'removed') {
       // on → off: stay silent (no toast spam on remove) — analytics only.
       track('favorite.removed', { kind });
     } else {

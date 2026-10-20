@@ -148,7 +148,7 @@ Wave 8 added infrastructure plumbing: a service worker for offline / app-shell c
   - **`/api/*`** — pass through (never cache chat/TTS/vision/version/summarize)
   - **HTML navigations** — network-first with 3s timeout, fall back to cache, fall back to an inline offline HTML page (warm radial gradient, "j**AI**sus" wordmark, pulsing "Waiting for a signal" dot)
   - **Static assets** — cache-first with background revalidation. Cap of 50 entries via FIFO eviction; only `response.type === 'basic'` (same-origin) responses are stored.
-  - **App shell** precached on `install`: `/`, `/manifest.json`, `/jaisus-embraces.mp4`, `/jaisus-prays.mp4`. Individual 404s are silently skipped (install never fails).
+  - **App shell** precached on `install`: `/`, `/manifest.json`, `/jaisus-embraces-1080.mp4`, `/jaisus-prays-1080.mp4`. Individual 404s are silently skipped (install never fails).
   - `skipWaiting()` + `clients.claim()` on activate. Old `jaisus-*` caches with non-matching `CACHE_VERSION` are deleted.
   - Accepts `{type: 'SKIP_WAITING'}` postMessage for forced activation (not currently sent — VersionCheck owns the reload-on-deploy path).
 

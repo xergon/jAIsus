@@ -193,7 +193,7 @@ export function useLongPress({
   );
 
   const onMouseLeave = useCallback(
-    (_e: React.MouseEvent) => {
+    () => {
       if (disabled) return;
       // Pointer left the element before the timer expired — abandon the hold.
       // We don't reset `firedRef` here: if the press already fired, the next

@@ -117,39 +117,47 @@ export function SavedMemosPanel({
   const onStopSpeakingRef = useRef(onStopSpeaking);
   useEffect(() => { onStopSpeakingRef.current = onStopSpeaking; }, [onStopSpeaking]);
 
-  // Reset transient UI + refresh "now" snapshot on each open.
+  // Reset transient UI on close. Adjusted during render (React's "store info
+  // from previous renders" pattern); timers and TTS are handled below.
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen);
+    if (!isOpen) {
+      setExpandedId(null);
+      setConfirmingClear(false);
+      setConfirmingDeleteId(null);
+      setSpeakingId(null);
+    }
+  }
+
+  // Refresh the "now" snapshot on each open; on close, drop pending timers
+  // and stop playback.
   // Audit fix: dropped `speakingId` from deps. Previously the close path
   // could miss the stop call when isSpeaking and isOpen flipped together
   // (the speakingId watcher below cleared the id before this effect ran).
   // We now unconditionally call onStopSpeaking on close — it's idempotent
   // in the parent — and rely on the ref to avoid re-binding noise.
   useEffect(() => {
-    if (!isOpen) {
-      setExpandedId(null);
-      setConfirmingClear(false);
-      setConfirmingDeleteId(null);
-      if (confirmTimerRef.current) {
-        clearTimeout(confirmTimerRef.current);
-        confirmTimerRef.current = null;
-      }
-      if (perItemConfirmTimerRef.current) {
-        clearTimeout(perItemConfirmTimerRef.current);
-        perItemConfirmTimerRef.current = null;
-      }
-      onStopSpeakingRef.current();
-      setSpeakingId(null);
-      return;
+    if (isOpen) {
+      const raf = requestAnimationFrame(() => setNow(Date.now()));
+      return () => cancelAnimationFrame(raf);
     }
-    setNow(Date.now());
+    if (confirmTimerRef.current) {
+      clearTimeout(confirmTimerRef.current);
+      confirmTimerRef.current = null;
+    }
+    if (perItemConfirmTimerRef.current) {
+      clearTimeout(perItemConfirmTimerRef.current);
+      perItemConfirmTimerRef.current = null;
+    }
+    onStopSpeakingRef.current();
   }, [isOpen]);
 
   // If TTS naturally ends (or the parent stops it for another reason),
   // clear the per-memo speaking indicator so the icon flips back.
-  useEffect(() => {
-    if (!isSpeaking && speakingId) {
-      setSpeakingId(null);
-    }
-  }, [isSpeaking, speakingId]);
+  if (!isSpeaking && speakingId !== null) {
+    setSpeakingId(null);
+  }
 
   // Cleanup pending confirm timer on unmount.
   // Audit fix: also stop any in-flight TTS on unmount. Previously, a route
@@ -262,24 +270,49 @@ export function SavedMemosPanel({
           <h2 id="saved-memos-title" className="text-lg font-bold text-stone-800">
             Voice memos ({memos.length})
           </h2>
-          {memos.length > 0 && (
+          {/* Close comes first in DOM order: it gets focus on open (not the
+              destructive Clear all), and touch screen-reader users, who
+              can't reach the aria-hidden backdrop or press Escape, get a way out. */}
+          <div className="flex flex-row-reverse items-center gap-2">
             <button
               type="button"
-              onClick={handleClearClick}
-              aria-label={
-                confirmingClear
-                  ? 'Confirm clear all voice memos'
-                  : 'Clear all voice memos'
-              }
-              className={`text-xs ${
-                confirmingClear
-                  ? 'text-rose-700 font-semibold'
-                  : 'text-rose-600 hover:underline'
-              } active:scale-[0.98] transition-transform`}
+              onClick={onClose}
+              aria-label="Close voice memos"
+              className="w-11 h-11 -mr-2 flex items-center justify-center rounded-full text-stone-500 hover:bg-stone-100 active:scale-95 transition-transform"
             >
-              {confirmingClear ? 'Sure? Tap again to confirm' : 'Clear all'}
+              <svg
+                className="w-5 h-5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M18 6L6 18" />
+                <path d="M6 6l12 12" />
+              </svg>
             </button>
-          )}
+            {memos.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearClick}
+                aria-label={
+                  confirmingClear
+                    ? 'Confirm clear all voice memos'
+                    : 'Clear all voice memos'
+                }
+                className={`text-xs ${
+                  confirmingClear
+                    ? 'text-rose-700 font-semibold'
+                    : 'text-rose-600 hover:underline'
+                } active:scale-[0.98] transition-transform`}
+              >
+                {confirmingClear ? 'Sure? Tap again to confirm' : 'Clear all'}
+              </button>
+            )}
+          </div>
         </div>
 
         <p className="px-4 text-xs text-stone-500 mt-1 pb-2">

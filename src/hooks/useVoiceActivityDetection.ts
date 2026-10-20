@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 /**
  * Voice Activity Detection (VAD) — passive mic listening that fires callbacks
@@ -67,6 +67,18 @@ function getAudioContextCtor(): AudioContextCtor | null {
   return w.webkitAudioContext ?? null;
 }
 
+const UNSUPPORTED_ERROR = 'Voice activity detection is not supported in this browser';
+
+// Support can't change while the page is open: nothing to subscribe to.
+const subscribeToSupport = () => () => {};
+function getSupportSnapshot(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const hasMedia = !!navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function';
+  return hasMedia && !!getAudioContextCtor();
+}
+// Server render and hydration report unsupported, as the old mount effect did.
+const getServerSupportSnapshot = () => false;
+
 export function useVoiceActivityDetection(options: UseVADOptions): UseVADResult {
   const {
     enabled,
@@ -79,7 +91,8 @@ export function useVoiceActivityDetection(options: UseVADOptions): UseVADResult 
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isSupported, setIsSupported] = useState(false);
+  // Read during render (not set from an effect), hydration-safe.
+  const isSupported = useSyncExternalStore(subscribeToSupport, getSupportSnapshot, getServerSupportSnapshot);
 
   // All timing / audio refs — these MUST NOT trigger re-renders on every frame.
   const streamRef = useRef<MediaStream | null>(null);
@@ -101,17 +114,6 @@ export function useVoiceActivityDetection(options: UseVADOptions): UseVADResult 
   useEffect(() => { onStartRef.current = onSpeechStart; }, [onSpeechStart]);
   useEffect(() => { onEndRef.current = onSpeechEnd; }, [onSpeechEnd]);
 
-  // Detect support once on mount.
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof navigator === 'undefined') {
-      setIsSupported(false);
-      return;
-    }
-    const hasMedia = !!navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function';
-    const hasAC = !!getAudioContextCtor();
-    setIsSupported(hasMedia && hasAC);
-  }, []);
-
   // Main effect: spin up/tear down everything based on `enabled`.
   // We intentionally don't depend on threshold/minSpeechMs — those are read
   // through closure references (refs below) so they can change without
@@ -126,19 +128,21 @@ export function useVoiceActivityDetection(options: UseVADOptions): UseVADResult 
     if (typeof window === 'undefined' || typeof navigator === 'undefined') return;
 
     const AC = getAudioContextCtor();
-    if (!AC || !navigator.mediaDevices?.getUserMedia) {
-      setError('Voice activity detection is not supported in this browser');
-      return;
-    }
+    // Unsupported: reported through `error` in the return value below.
+    if (!AC || !navigator.mediaDevices?.getUserMedia) return;
 
     // Generation guard — if the caller flips `enabled` off (or unmounts)
     // while getUserMedia is still pending, we must NOT install the stream.
     let cancelled = false;
 
     async function init() {
+      // Outside the try so the catch can release them if setup throws after
+      // getUserMedia: the refs (and so the cleanup) only see them on success.
+      let stream: MediaStream | null = null;
+      let ctx: AudioContext | null = null;
       try {
         setError(null);
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
         if (cancelled) {
           stream.getTracks().forEach(t => t.stop());
@@ -146,7 +150,7 @@ export function useVoiceActivityDetection(options: UseVADOptions): UseVADResult 
         }
 
         // AC is non-null here — checked above before entering init().
-        const ctx = new AC!();
+        ctx = new AC!();
         const source = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 2048;
@@ -216,6 +220,10 @@ export function useVoiceActivityDetection(options: UseVADOptions): UseVADResult 
 
         rafRef.current = requestAnimationFrame(tick);
       } catch (err) {
+        // Before the cancelled check, so the mic is released either way.
+        // Stopping tracks twice is harmless.
+        stream?.getTracks().forEach(t => t.stop());
+        if (ctx && ctx.state !== 'closed') ctx.close().catch(() => { /* */ });
         if (cancelled) return;
         const name = (err as Error)?.name;
         if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
@@ -270,5 +278,10 @@ export function useVoiceActivityDetection(options: UseVADOptions): UseVADResult 
     };
   }, [enabled]);
 
-  return { isMonitoring, isSpeaking, error, isSupported };
+  return {
+    isMonitoring,
+    isSpeaking,
+    error: error ?? (enabled && !isSupported ? UNSUPPORTED_ERROR : null),
+    isSupported,
+  };
 }

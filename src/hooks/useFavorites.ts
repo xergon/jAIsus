@@ -1,51 +1,34 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import {
   type Favorite,
+  type FavoriteToggleResult,
   favoriteId,
+  getFavoritesSnapshot,
+  getServerFavoritesSnapshot,
   isFavorite as isFavoriteId,
-  listFavorites,
+  subscribeFavorites,
   toggleFavorite,
+  toggleFavoriteResult,
 } from '@/lib/favorites';
-
-const CHANGE_EVENT = 'jaisus-favorites-changed';
 
 /**
  * React hook over the favorites lib.
  *
- * - `favorites` is empty during SSR and on first render; hydrated in an effect
- *   to avoid hydration mismatches.
+ * - `favorites` is empty during SSR and the hydration render (server
+ *   snapshot), then follows localStorage — no hydration mismatch.
  * - Subscribes to the `jaisus-favorites-changed` window event so all mounted
  *   instances stay in sync after a mutation anywhere in the tree.
  * - Also listens to the cross-tab `storage` event so changes in another tab
  *   are reflected here too.
  */
 export function useFavorites() {
-  const [favorites, setFavorites] = useState<Favorite[]>([]);
-
-  const refresh = useCallback(() => {
-    setFavorites(listFavorites());
-  }, []);
-
-  useEffect(() => {
-    // Initial hydrate after mount (avoids SSR mismatch).
-    refresh();
-
-    if (typeof window === 'undefined') return;
-
-    const onChange = () => refresh();
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === 'jaisus-favorites' || e.key === null) refresh();
-    };
-
-    window.addEventListener(CHANGE_EVENT, onChange);
-    window.addEventListener('storage', onStorage);
-    return () => {
-      window.removeEventListener(CHANGE_EVENT, onChange);
-      window.removeEventListener('storage', onStorage);
-    };
-  }, [refresh]);
+  const favorites = useSyncExternalStore(
+    subscribeFavorites,
+    getFavoritesSnapshot,
+    getServerFavoritesSnapshot
+  );
 
   /** Synchronous check derived from current state — no storage read. */
   const isFavorited = useCallback(
@@ -59,18 +42,22 @@ export function useFavorites() {
     [favorites]
   );
 
-  /** Wraps lib's toggleFavorite and re-reads local state. */
+  /** Wraps lib's toggleFavorite. The change event it dispatches updates
+   *  `favorites` synchronously. Prefer `toggleWithStatus`, which also
+   *  reports a failed write. */
   const toggle = useCallback(
-    (payload: Omit<Favorite, 'id' | 'createdAt'>): Favorite | null => {
-      const result = toggleFavorite(payload);
-      // toggleFavorite already dispatches the change event, which our listener
-      // picks up — but in the same tick the listener hasn't fired yet, so
-      // refresh eagerly so the calling component sees the update immediately.
-      refresh();
-      return result;
-    },
-    [refresh]
+    (payload: Omit<Favorite, 'id' | 'createdAt'>): Favorite | null =>
+      toggleFavorite(payload),
+    []
   );
 
-  return { favorites, isFavorited, toggle };
+  /** Toggle and report 'added' / 'removed' / 'failed' (storage full or
+   *  blocked), so callers only confirm a save that happened. */
+  const toggleWithStatus = useCallback(
+    (payload: Omit<Favorite, 'id' | 'createdAt'>): FavoriteToggleResult =>
+      toggleFavoriteResult(payload),
+    []
+  );
+
+  return { favorites, isFavorited, toggle, toggleWithStatus };
 }

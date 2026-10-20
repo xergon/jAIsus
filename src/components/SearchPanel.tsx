@@ -229,12 +229,38 @@ export function SearchPanel({
 
         {/* Header */}
         <div className="shrink-0 px-4 pb-3">
-          <h2 id="search-title" className="text-lg font-bold text-stone-800">
-            Search
-          </h2>
-          <p className="text-xs text-stone-500 mt-0.5">
-            Find anything from your chats, saved hearts, or parables.
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 id="search-title" className="text-lg font-bold text-stone-800">
+                Search
+              </h2>
+              <p className="text-xs text-stone-500 mt-0.5">
+                Find anything from your chats, saved hearts, or parables.
+              </p>
+            </div>
+            {/* Touch screen-reader users can't reach the aria-hidden backdrop
+                or press Escape, so the sheet needs its own way out. */}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close search"
+              className="shrink-0 w-11 h-11 -mr-2 -mt-1 flex items-center justify-center rounded-full text-stone-500 hover:bg-stone-100 active:scale-95 transition-transform"
+            >
+              <svg
+                className="w-5 h-5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M18 6L6 18" />
+                <path d="M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
 
           {/* Search input */}
           <div className="relative mt-3">
@@ -261,6 +287,8 @@ export function SearchPanel({
             <input
               ref={inputRef}
               id="search-input"
+              // useModalA11y focuses this on open, not the Close button above.
+              data-autofocus
               type="search"
               value={query}
               onChange={e => setQuery(e.target.value)}

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import type { UIMessage } from 'ai';
 import { VOICE_OPTIONS, DEFAULT_VOICE_ID } from '@/lib/constants';
 import { setStoredVoiceId, setVoiceOverride } from '@/hooks/useSpeechSynthesis';
 import { PERSONALITIES, getPersonality } from '@/lib/personalities';
@@ -53,6 +54,9 @@ interface SettingsPanelProps {
   vadEnabled: boolean;
   onToggleVad: () => void;
   onOpenCreator?: () => void;
+  /** The chat as shown on screen; the export falls back to the saved copy,
+   *  which keeps only the last 100 messages. */
+  messages?: ReadonlyArray<UIMessage>;
 }
 
 export function SettingsPanel({
@@ -70,6 +74,7 @@ export function SettingsPanel({
   vadEnabled,
   onToggleVad,
   onOpenCreator,
+  messages,
 }: SettingsPanelProps) {
   const [cleared, setCleared] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState(DEFAULT_VOICE_ID);
@@ -176,11 +181,11 @@ export function SettingsPanel({
                   type="button"
                   aria-pressed={personalityId === p.id}
                   onClick={() => {
+                    // Re-tapping the current one is a no-op: switching aborts a
+                    // streaming reply and re-applies the personality's voice.
+                    if (p.id === personalityId) return;
                     onPersonalityChange(p.id);
-                    // Only toast on an actual change, not when re-tapping the current selection.
-                    if (p.id !== personalityId) {
-                      toast.success(`Switched to ${p.name}`);
-                    }
+                    toast.success(`Switched to ${p.name}`);
                   }}
                   className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-left transition-all ${
                     personalityId === p.id
@@ -292,9 +297,10 @@ export function SettingsPanel({
 
           {/* Voice selection */}
           <div>
-            <p className="text-sm font-medium text-stone-800 mb-1.5">Voice</p>
+            <label htmlFor="settings-voice" className="block text-sm font-medium text-stone-800 mb-1.5">Voice</label>
             <div className="flex gap-2">
               <select
+                id="settings-voice"
                 value={selectedVoice}
                 onChange={e => handleVoiceChange(e.target.value)}
                 className="flex-1 rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-800
@@ -323,7 +329,7 @@ export function SettingsPanel({
               <p className="text-sm font-medium text-stone-800">Export your data</p>
               <p className="text-xs text-stone-500">Download chats and favorites as Markdown, JSON, or plain text</p>
             </div>
-            <ExportButton />
+            <ExportButton messages={messages} />
           </div>
 
           {/* Clear chat history */}

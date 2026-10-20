@@ -168,7 +168,10 @@ export async function POST(req: Request) {
             { inlineData: { mimeType: baseMime, data: audioData } },
           ],
         }],
-        generationConfig: { maxOutputTokens: 2048, temperature: 0 },
+        // thinkingBudget 0: 2.5 Flash thinks by default and the thinking
+        // tokens count against maxOutputTokens, which can cut a long
+        // transcript short. Verbatim transcription gains nothing from it.
+        generationConfig: { maxOutputTokens: 2048, temperature: 0, thinkingConfig: { thinkingBudget: 0 } },
       }),
       // Audit fix: wire the request signal so a client disconnect cancels
       // the upstream Gemini billing.
