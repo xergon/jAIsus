@@ -1,13 +1,17 @@
 'use client';
 
 import type { VoiceState } from '@/lib/types';
-import type { Emotion } from '@/lib/emotions';
+import type { Emotion, HeroState } from '@/lib/emotions';
 import { AnimatedJesus } from './AnimatedJesus';
 
 interface HeroSectionProps {
   voiceState: VoiceState;
   interimTranscript?: string;
   emotion?: Emotion;
+  /** Listening / thinking, while it lasts (see AnimatedJesus). */
+  heroState?: HeroState | null;
+  /** Bumped when a reply is interrupted (see AnimatedJesus). */
+  emotionCancelKey?: number;
 }
 
 // Perf audit fix: compute starfield positions ONCE at module load instead
@@ -38,7 +42,7 @@ function transcriptTail(text: string): string {
  * Hero section — Jesus dominates the top, fades into WHITE content area below.
  * Extended +60px with softer gradient blend.
  */
-export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSectionProps) {
+export function HeroSection({ voiceState, interimTranscript, emotion, heroState = null, emotionCancelKey = 0 }: HeroSectionProps) {
   // Audit fix: provide a `vh` fallback before `svh`. iOS Safari 15.0-15.3
   // doesn't know `svh` units; without the fallback the height resolves to 0
   // and the hero would collapse (the minHeight rescues it, but the intended
@@ -63,7 +67,7 @@ export function HeroSection({ voiceState, interimTranscript, emotion }: HeroSect
     >
       {/* ===== BACKGROUND: Jesus video/image fills hero ===== */}
       <div className="absolute inset-0 z-0">
-        <AnimatedJesus isSpeaking={voiceState === 'speaking'} emotion={emotion} />
+        <AnimatedJesus isSpeaking={voiceState === 'speaking'} emotion={emotion} state={heroState} cancelKey={emotionCancelKey} />
       </div>
 
       {/* ===== Top gradient — dark, for title readability over starfield ===== */}

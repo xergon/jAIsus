@@ -1,12 +1,19 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { EMOTION_VIDEO_MAP, type Emotion } from '@/lib/emotions';
+import { EMOTION_FALLBACK, EMOTION_VIDEO_MAP, IDLE_CLIPS, type Emotion, type HeroState } from '@/lib/emotions';
 
 interface AnimatedJesusProps {
   /** Not used yet; if a speaking visual is added, read it through a ref so the canvas animation doesn't restart. */
   isSpeaking?: boolean;
   emotion?: Emotion;
+  /** Listening / thinking while it lasts: shown with that emotion's clips,
+   *  but never latched like an emotion, and its clip heads back to rest as
+   *  soon as the state is over. */
+  state?: HeroState | null;
+  /** Changes when the reply is interrupted: drops an emotion still waiting
+   *  for its clip, so the interrupted reply doesn't act on after it stopped. */
+  cancelKey?: number;
 }
 
 /**
@@ -19,20 +26,46 @@ interface AnimatedJesusProps {
  * - Release the old decoder immediately after swap
  */
 
-const VIDEO_PLAYLIST = [
-  '/jaisus-embraces-1080.mp4',
-  '/jaisus-loves-you-1080.mp4',
-  '/jaisus-prays-1080.mp4',
-  '/jAisus-angry-1080.mp4',
-  '/jAisus-suffers-1080.mp4',
-  '/jAisus-shakinghead-1080.mp4',
-  '/jAisus_thumps_up-1080.mp4',
-];
+// An older clip, made from a different base image (the face changes at a
+// cut), so no emotion maps to it: only played when nothing mapped loads.
+const LEGACY_FALLBACK = '/jaisus-loves-you-1080.mp4';
+
+// Every clip, idle ones first: the session starts on VIDEO_PLAYLIST[0].
+const VIDEO_PLAYLIST = Array.from(new Set([
+  ...EMOTION_VIDEO_MAP.neutral,
+  ...Object.values(EMOTION_VIDEO_MAP).flat(),
+  LEGACY_FALLBACK,
+]));
+
+// Probed at startup to decide between video and the portrait. Only a few:
+// each probe briefly holds a decoder (iOS allows very few), and the other
+// clips are checked when they first play — one that fails is skipped for a
+// while. The legacy clip covers a deploy where the idle clips are missing.
+const PROBE_CLIPS = [...EMOTION_VIDEO_MAP.neutral, LEGACY_FALLBACK];
+
+// With no idle clip playable, the hero rests on these, not on whatever clip
+// comes next (anger, suffering).
+const CALM_EMOTIONS: Emotion[] = ['peace', 'warmth', 'prayer', 'love'];
 
 // Stop playback at 7s16f (7.667s) out of 8s clips — last 8 frames skipped in playback.
 const SKIP_END_SECONDS = 0.333;
 
-export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
+// The idle clips are at the rest pose only in their first 0.5 s and last
+// 1.5 s (in between the head turns or the heart glow flares; measured against
+// frame 0). A new emotion cuts in only there, or the pose jumps.
+const IDLE_CUT_HEAD = 0.5;
+const IDLE_CUT_TAIL = 1.5;
+
+// 'thinking' interrupts an idle clip only once the reply takes this long, so
+// a fast reply never starts the pondering clip.
+const THINKING_DELAY_MS = 1500;
+
+// A clip that failed to load is skipped for a while (a network blip, a
+// decoder iOS took back), twice as long each time it fails again (a clip
+// that isn't deployed), up to 32 minutes.
+const FAIL_RETRY_MS = 60_000;
+
+export function AnimatedJesus({ emotion = 'neutral', state = null, cancelKey = 0 }: AnimatedJesusProps) {
   const videoARef = useRef<HTMLVideoElement>(null);
   const videoBRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -47,19 +80,52 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
   const currentIndexRef = useRef(0);
   const preloadedRef = useRef(false);
   const mountedRef = useRef(true);
-  // Persistent emotion — every swap consults this to pick the next video
+  // Persistent emotion — every swap consults this to pick the next video.
+  // The state while there is one, else the emotion prop.
   const currentEmotionRef = useRef<Emotion>('neutral');
   // Latest non-neutral emotion not yet shown. The emotion is only read at clip
   // boundaries (~every 7.5s), and ChatInterface resets it to neutral as soon
   // as speech ends — often before the next boundary, so the emotion clip was
-  // never picked. Consumed by the swap that plays it.
+  // never picked. Consumed by the swap that plays it. States never go here:
+  // they end, and must not hold back (or overwrite) a reply's emotion.
   const pendingEmotionRef = useRef<Emotion | null>(null);
+  const stateRef = useRef<HeroState | null>(null);
+  const emotionPropRef = useRef<Emotion>('neutral');
+  // Set by the playback engine: starts the pending emotion (or the state) now
+  // if the clip on screen is an idle one near the rest pose, else as soon as
+  // it is back there (see IDLE_CUT_HEAD). Emotion clips still finish first.
+  const interruptIdleRef = useRef<(() => void) | null>(null);
+  // Set by the playback engine: a clip on screen for a state that is over, or
+  // with a reply's emotion waiting, heads back to the rest pose early.
+  const releaseStateClipRef = useRef<(() => void) | null>(null);
 
-  // Keep the ref in sync with the prop
+  // An interrupted reply's emotion that hasn't started yet is dropped.
   useEffect(() => {
-    currentEmotionRef.current = emotion;
-    if (emotion !== 'neutral') pendingEmotionRef.current = emotion;
+    if (cancelKey) pendingEmotionRef.current = null;
+  }, [cancelKey]);
+
+  // Keep the refs in sync with the props
+  useEffect(() => {
+    emotionPropRef.current = emotion;
+    if (!stateRef.current) currentEmotionRef.current = emotion;
+    if (emotion !== 'neutral') {
+      pendingEmotionRef.current = emotion;
+      releaseStateClipRef.current?.();
+      interruptIdleRef.current?.();
+    }
   }, [emotion]);
+
+  useEffect(() => {
+    stateRef.current = state;
+    currentEmotionRef.current = state ?? emotionPropRef.current;
+    releaseStateClipRef.current?.();
+    if (state === 'listening') interruptIdleRef.current?.();
+    if (state !== 'thinking') return;
+    const t = setTimeout(() => {
+      if (stateRef.current === 'thinking') interruptIdleRef.current?.();
+    }, THINKING_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [state]);
 
   // Detect available videos on mount.
   //
@@ -93,8 +159,14 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
       if (finalized || !mountedRef.current) return;
       finalized = true;
       if (found.length > 0) {
-        const ordered = VIDEO_PLAYLIST.filter(v => found.includes(v));
-        videosRef.current = ordered;
+        // Probed clips that failed are left out; the rest are assumed to
+        // load and are skipped later if they don't. A clip known to load
+        // comes first (the session starts on it): the legacy one when the
+        // idle clips are missing.
+        videosRef.current = [
+          ...VIDEO_PLAYLIST.filter(v => found.includes(v)),
+          ...VIDEO_PLAYLIST.filter(v => !PROBE_CLIPS.includes(v)),
+        ];
         setMode('video');
       } else {
         // The portrait effect below loads the image (canvas if that fails too)
@@ -110,15 +182,15 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
       if (videosRef.current.length > 0) {
         // Mutate in place: the playback engine holds this array. Appending
         // keeps the clip indices it has stored valid.
-        videosRef.current.push(src);
+        if (!videosRef.current.includes(src)) videosRef.current.push(src);
       } else {
         // The cutoff found nothing and fell back to the portrait — switch to video
-        videosRef.current = [src];
+        videosRef.current = [src, ...VIDEO_PLAYLIST.filter(v => v !== src)];
         setMode('video');
       }
     }
 
-    VIDEO_PLAYLIST.forEach(src => {
+    PROBE_CLIPS.forEach(src => {
       const v = document.createElement('video');
       probes.push(v);
       v.preload = 'metadata';
@@ -129,12 +201,12 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
         checked++;
         releaseProbe(v);
         if (finalized) addLateVideo(src);
-        else if (checked === VIDEO_PLAYLIST.length) done();
+        else if (checked === PROBE_CLIPS.length) done();
       };
       v.onerror = () => {
         checked++;
         releaseProbe(v);
-        if (checked === VIDEO_PLAYLIST.length) done();
+        if (checked === PROBE_CLIPS.length) done();
       };
     });
 
@@ -233,6 +305,15 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
     let consecutiveErrorCount = 0;
     const MAX_CONSECUTIVE_ERRORS = 8;
 
+    // The emotion the clip just swapped in is for, until it plays: if it fails
+    // to load, that emotion gets another clip or its fallback, not whatever
+    // is current by then.
+    let swapEmotion: Emotion | null = null;
+    // The state the clip on screen was picked for (see releaseStateClipRef).
+    let stateClip: HeroState | null = null;
+    // An interrupt came mid-way through an idle clip: cut it near its end.
+    let tailCutWanted = false;
+
     // Autoplay blocked (iOS Low Power Mode, Safari "Never Auto-Play"): the
     // stall watchdog used to swap clips every ~4s for the whole session.
     // Hold the current clip instead and resume it on the next tap.
@@ -293,6 +374,9 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
         if (!mountedRef.current) return;
         getActive().style.visibility = 'visible';
         setVideoReady(true);
+        // An emotion that arrived while loading (the welcome) plays now
+        // rather than after the first idle clip (still within IDLE_CUT_HEAD).
+        if (pendingEmotionRef.current) trackTimeout(() => interruptIdleRef.current?.(), 200);
       });
     }
     for (const el of slots) REVEAL_EVENTS.forEach(e => el.addEventListener(e, revealVideo));
@@ -333,17 +417,55 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
       trackTimeout(revealVideo, 300);
     });
 
+    // Clips that failed to load, when and how often (see FAIL_RETRY_MS), and
+    // when each clip last started (a counter), so an emotion with several
+    // clips rotates through them.
+    const failedClips = new Map<string, { at: number; count: number }>();
+    const lastPlayed = new Map<string, number>();
+    let playCounter = 0;
+
+    function hasFailed(src: string): boolean {
+      const f = failedClips.get(src);
+      return f !== undefined && Date.now() - f.at < FAIL_RETRY_MS * Math.min(2 ** (f.count - 1), 32);
+    }
+    // Back online: whatever failed meanwhile may load now.
+    function onOnline() {
+      failedClips.clear();
+    }
+
+    function playableClips(emo: Emotion): string[] {
+      return (EMOTION_VIDEO_MAP[emo] ?? []).filter(v => videos.includes(v) && !hasFailed(v));
+    }
+
+    /** Least recently played first; avoids repeating the clip on screen. */
+    function byLastPlayed(candidates: string[], current: string | undefined): string {
+      const pool = candidates.length > 1 ? candidates.filter(v => v !== current) : candidates;
+      return [...pool].sort((a, b) => (lastPlayed.get(a) ?? -1) - (lastPlayed.get(b) ?? -1))[0];
+    }
+
     /** Pick the best video index for the current emotion */
     function pickEmotionVideo(): number {
       // A latched emotion wins over a prop that has already gone back to neutral
-      const emo = pendingEmotionRef.current ?? currentEmotionRef.current;
-      const preferred = EMOTION_VIDEO_MAP[emo] || EMOTION_VIDEO_MAP.neutral;
-      // Find the first preferred video that exists in our available list
-      for (const pref of preferred) {
-        const idx = videos.indexOf(pref);
-        if (idx !== -1) return idx;
+      let emo: Emotion | undefined = pendingEmotionRef.current ?? currentEmotionRef.current;
+      const current = videos[currentIndexRef.current];
+      // Follow the fallback chain until an emotion has a playable clip
+      for (let hops = 0; emo && hops < 8; hops++) {
+        const candidates = playableClips(emo);
+        if (candidates.length > 0) return videos.indexOf(byLastPlayed(candidates, current));
+        emo = emo === 'neutral' ? undefined : (EMOTION_FALLBACK[emo] ?? 'neutral');
       }
-      // Fallback: next sequential
+      // No idle clip plays: rest on a calm clip
+      const calm = CALM_EMOTIONS.flatMap(playableClips);
+      if (calm.length > 0) return videos.indexOf(byLastPlayed(calm, current));
+      // Nothing mapped is playable: the legacy clip, the clip on screen
+      // again, else any clip that hasn't failed
+      const legacy = videos.indexOf(LEGACY_FALLBACK);
+      if (legacy !== -1 && !hasFailed(LEGACY_FALLBACK)) return legacy;
+      if (current && !hasFailed(current)) return currentIndexRef.current;
+      for (let i = 1; i <= videos.length; i++) {
+        const idx = (currentIndexRef.current + i) % videos.length;
+        if (!hasFailed(videos[idx])) return idx;
+      }
       return (currentIndexRef.current + 1) % videos.length;
     }
 
@@ -357,15 +479,22 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
     // Hide + release the outgoing clip only once the incoming one has a frame
     // on screen. A fixed 50ms delay left the hero black whenever the new clip
     // loaded slower (e.g. an emotion change reloading it at the boundary).
-    // The fallback stops a stuck load from keeping two decoders alive.
+    // The fallback covers a frame the events missed (rAF doesn't run in a
+    // hidden tab); without a frame it keeps waiting — hiding then left the
+    // hero dark on a slow connection — until the give-up stops a stuck load
+    // from keeping two decoders alive.
     let cancelPendingHide: (() => void) | null = null;
     function hideWhenNextPaints(current: HTMLVideoElement, next: HTMLVideoElement) {
       let raf = 0;
-      const fallback = setTimeout(finish, 1500);
+      const fallback = setTimeout(() => {
+        if (next.readyState >= 2) finish();
+      }, 1500);
+      const giveUp = setTimeout(finish, 9000);
       function cancel() {
         next.removeEventListener('loadeddata', onFrame);
         next.removeEventListener('playing', onFrame);
         clearTimeout(fallback);
+        clearTimeout(giveUp);
         cancelAnimationFrame(raf);
         if (cancelPendingHide === cancel) cancelPendingHide = null;
       }
@@ -406,9 +535,15 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
       // about to load into — drop it.
       cancelPendingHide?.();
       currentIndexRef.current = pickEmotionVideo();
+      lastPlayed.set(videos[currentIndexRef.current], ++playCounter);
       // The latched emotion is consumed only here, when its clip starts —
-      // not at the 80% preload, which would drop it again.
+      // not at the 80% preload, which would drop it again. Kept in
+      // swapEmotion until the clip plays, in case it fails to load.
+      swapEmotion = pendingEmotionRef.current;
       pendingEmotionRef.current = null;
+      // Nothing latched: the clip is for the state, if there is one
+      stateClip = swapEmotion ? null : stateRef.current;
+      tailCutWanted = false;
 
       const next = getNext();
       const current = getActive();
@@ -439,14 +574,27 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
     function onTimeUpdate(this: HTMLVideoElement) {
       const active = getActive();
       if (this !== active) return;
+      // Hidden, the clip is paused: a seek's timeupdate must not start the
+      // next clip (and keep cycling and downloading clips) in the background.
+      if (document.hidden) return;
       if (!this.duration || this.duration === Infinity) return;
 
       const progress = this.currentTime / this.duration;
       const remaining = this.duration - this.currentTime;
+      // Something waits behind an idle clip: cut it once it's back near rest
+      const cutIdle =
+        (tailCutWanted || pendingEmotionRef.current !== null) &&
+        IDLE_CLIPS.has(this.getAttribute('src') ?? '');
 
       // Preload at 80% — if there's an emotion request, preload THAT video
-      if (progress > 0.8) {
+      if (progress > 0.8 || (cutIdle && remaining <= IDLE_CUT_TAIL + 1)) {
         preloadNext();
+      }
+
+      if (cutIdle && remaining <= IDLE_CUT_TAIL) {
+        this.pause();
+        swapToNext();
+        return;
       }
 
       // Let the clip play to completion (minus last 8 frames), then swap
@@ -462,6 +610,9 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
 
     function onError(this: HTMLVideoElement) {
       console.warn('Video error, skipping');
+      // Skip this clip for a while (see FAIL_RETRY_MS)
+      const src = this.getAttribute('src');
+      if (src) failedClips.set(src, { at: Date.now(), count: (failedClips.get(src)?.count ?? 0) + 1 });
       // Audit fix: bound the swap-on-error recursion. If every video fails,
       // synchronous onError → swapToNext → onError chains until stack overflow.
       consecutiveErrorCount++;
@@ -470,13 +621,19 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
         if (mountedRef.current) setMode('image');
         return;
       }
-      if (this === getActive()) swapToNext();
+      if (this === getActive()) {
+        // Its emotion gets another clip or its fallback (the failed one is skipped)
+        if (!pendingEmotionRef.current && swapEmotion) pendingEmotionRef.current = swapEmotion;
+        swapToNext();
+      }
     }
     // Reset the consecutive-error counter (and the autoplay block) when a
     // video successfully plays.
     function onPlaying(this: HTMLVideoElement) {
       if (this !== getActive()) return;
       consecutiveErrorCount = 0;
+      // Its emotion is on screen: an error later on doesn't bring it back.
+      swapEmotion = null;
       if (autoplayBlocked) {
         autoplayBlocked = false;
         removeGestureListeners();
@@ -487,8 +644,10 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
       if (document.hidden) {
         getActive().pause();
       } else {
+        // An emotion that arrived while hidden starts now
+        if (pendingEmotionRef.current) interruptIdleRef.current?.();
         const active = getActive();
-        if (active.src) active.play().catch(markBlocked);
+        if (active.src && active.paused) active.play().catch(markBlocked);
       }
     }
 
@@ -516,6 +675,49 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
       lastTime = active.currentTime;
     }, 4000);
 
+    // A new emotion shouldn't wait for an idle clip to finish (up to 8 s).
+    // Every clip starts on the rest pose, which idle clips are at only near
+    // their start and end: there the cut doesn't jump; mid-clip it waits for
+    // the tail (onTimeUpdate). Emotion clips still play out. Not in a hidden
+    // tab: that would start playback there (it runs on return instead).
+    interruptIdleRef.current = () => {
+      if (!revealed || autoplayBlocked || !mountedRef.current || document.hidden) return;
+      const active = getActive();
+      const src = active.getAttribute('src');
+      if (!src || !IDLE_CLIPS.has(src)) return;
+      const d = active.duration;
+      if (d && isFinite(d) && active.currentTime > IDLE_CUT_HEAD && d - active.currentTime > IDLE_CUT_TAIL) {
+        tailCutWanted = true;
+        return;
+      }
+      active.pause();
+      swapToNext();
+    };
+
+    // A clip picked for a state (listening, thinking) plays only while the
+    // state lasts or until a reply's emotion is waiting. Keyframed clips go
+    // rest → pose, then pose → rest: the mirrored moment shows nearly the
+    // same pose on its way back, so seeking there heads back to rest without
+    // a jump (past halfway it already is). A hard cut would jump.
+    releaseStateClipRef.current = () => {
+      if (!stateClip) return;
+      if (stateClip === stateRef.current && !pendingEmotionRef.current) return;
+      stateClip = null;
+      const active = getActive();
+      const play = playCounter;
+      const seekBack = () => {
+        // Still the same clip on screen (not one swapped in since)
+        if (active !== getActive() || play !== playCounter) return;
+        const d = active.duration;
+        const t = active.currentTime;
+        if (d && isFinite(d) && t < d / 2) active.currentTime = d - t;
+      };
+      // A state that ended before its clip loaded: as soon as it has a duration
+      if (active.readyState >= 1) seekBack();
+      else active.addEventListener('loadedmetadata', seekBack, { once: true });
+    };
+    lastPlayed.set(videos[0], ++playCounter);
+
     va.addEventListener('timeupdate', onTimeUpdate);
     vb.addEventListener('timeupdate', onTimeUpdate);
     va.addEventListener('ended', onEnded);
@@ -525,8 +727,12 @@ export function AnimatedJesus({ emotion = 'neutral' }: AnimatedJesusProps) {
     va.addEventListener('playing', onPlaying);
     vb.addEventListener('playing', onPlaying);
     document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('online', onOnline);
 
     return () => {
+      interruptIdleRef.current = null;
+      releaseStateClipRef.current = null;
+      window.removeEventListener('online', onOnline);
       clearInterval(stallWatchdog);
       clearInterval(safetyInterval);
       // Audit fix: clear every tracked setTimeout so late-firing callbacks

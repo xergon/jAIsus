@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react';
 import type { JSX, TouchEvent } from 'react';
 import { useModalA11y } from '@/hooks/useModalA11y';
+import { MAX_NAME_CHARS, cleanName, setProfileName } from '@/lib/user-profile';
 
 interface OnboardingOverlayProps {
   /** Controlled. Parent decides when to show. */
@@ -22,6 +23,8 @@ interface Slide {
   note?: string;
   /** Optional visual under the text. */
   visual?: 'mic' | 'chips';
+  /** Ask (optionally) what jAIsus should call the user. */
+  askName?: boolean;
 }
 
 const SLIDES: ReadonlyArray<Slide> = [
@@ -47,6 +50,7 @@ const SLIDES: ReadonlyArray<Slide> = [
     title: 'Begin',
     subtitle:
       "Be kind to yourself. He's just an AI — but he might say something useful anyway.",
+    askName: true,
   },
 ];
 
@@ -76,9 +80,31 @@ export function OnboardingOverlay({
 }: OnboardingOverlayProps): JSX.Element | null {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [index, setIndex] = useState(0);
+  const [name, setName] = useState('');
+  const [nameError, setNameError] = useState<string | null>(null);
   const touchStartXRef = useRef<number | null>(null);
 
-  useModalA11y({ isOpen, onClose: onComplete, ref: dialogRef });
+  // However the overlay closes (Start talking, Skip, Escape, a tap outside),
+  // a name typed on the last slide is kept. Optional: empty saves nothing.
+  // Never blocks closing: an unusable name is simply dropped here.
+  function finish() {
+    if (name.trim()) setProfileName(name);
+    onComplete();
+  }
+
+  // Start talking / Enter / swipe on the last slide: say why a name can't be
+  // used instead of silently dropping it. Checks cleanName, not
+  // setProfileName's result, which is also false when storage is blocked.
+  function submit() {
+    const trimmed = name.trim();
+    if (trimmed && !cleanName(trimmed)) {
+      setNameError(`Use letters only, up to ${MAX_NAME_CHARS} characters.`);
+      return;
+    }
+    finish();
+  }
+
+  useModalA11y({ isOpen, onClose: finish, ref: dialogRef });
 
   // When the overlay is re-opened (e.g. via a debug reset), restart at slide
   // 0. Adjusted during render (React's "store info from previous renders"
@@ -86,7 +112,11 @@ export function OnboardingOverlay({
   const [wasOpen, setWasOpen] = useState(isOpen);
   if (isOpen !== wasOpen) {
     setWasOpen(isOpen);
-    if (isOpen) setIndex(0);
+    if (isOpen) {
+      setIndex(0);
+      setName('');
+      setNameError(null);
+    }
   }
 
   if (!isOpen) return null;
@@ -96,7 +126,7 @@ export function OnboardingOverlay({
 
   function goNext() {
     if (isLast) {
-      onComplete();
+      submit();
       return;
     }
     setIndex(i => Math.min(i + 1, SLIDES.length - 1));
@@ -107,6 +137,11 @@ export function OnboardingOverlay({
   }
 
   function handleTouchStart(e: TouchEvent<HTMLDivElement>) {
+    // A drag inside the name field moves its cursor, not the slides.
+    if (e.target instanceof HTMLInputElement) {
+      touchStartXRef.current = null;
+      return;
+    }
     touchStartXRef.current = e.touches[0]?.clientX ?? null;
   }
 
@@ -131,7 +166,7 @@ export function OnboardingOverlay({
       // itself (not a child). Previously a swipe that ended outside the card
       // could bubble a click here and prematurely close the whole onboarding.
       onClick={(e) => {
-        if (e.target === e.currentTarget) onComplete();
+        if (e.target === e.currentTarget) finish();
       }}
     >
       <style>{SLIDE_KEYFRAMES}</style>
@@ -150,7 +185,7 @@ export function OnboardingOverlay({
         {/* Skip link — small, top-right, always available */}
         <button
           type="button"
-          onClick={onComplete}
+          onClick={finish}
           className="absolute top-3 right-4 text-xs font-medium text-stone-500 hover:text-stone-700 active:scale-[0.98] transition-all"
         >
           Skip
@@ -212,6 +247,54 @@ export function OnboardingOverlay({
                   {emoji}
                 </span>
               ))}
+            </div>
+          )}
+
+          {slide.askName && (
+            <div className="mt-5">
+              <label
+                htmlFor="onboarding-name"
+                className="block text-sm font-medium text-stone-700 text-center"
+              >
+                What should jAIsus call you?{' '}
+                <span className="font-normal text-stone-400">(optional)</span>
+              </label>
+              {/* 16px text, or iOS zooms the page in on focus. Enter starts. */}
+              <input
+                id="onboarding-name"
+                type="text"
+                value={name}
+                onChange={e => {
+                  setName(e.target.value);
+                  setNameError(null);
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    submit();
+                  }
+                }}
+                aria-invalid={!!nameError}
+                aria-describedby={nameError ? 'onboarding-name-error' : undefined}
+                maxLength={MAX_NAME_CHARS}
+                placeholder="Your first name"
+                autoComplete="given-name"
+                autoCapitalize="words"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="go"
+                className="mt-2 w-full min-h-11 rounded-xl border border-stone-300 bg-white px-4 py-2 text-base text-center
+                  focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent"
+              />
+              {nameError && (
+                <p
+                  id="onboarding-name-error"
+                  role="alert"
+                  className="mt-2 text-xs text-red-600 text-center"
+                >
+                  {nameError}
+                </p>
+              )}
             </div>
           )}
         </div>

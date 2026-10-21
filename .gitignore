@@ -53,3 +53,6 @@ next-env.d.ts
 # claude session data
 .claude/
 .env*.local
+
+# High-res generated originals (4K styleframes, 2K/4K source videos) — kept locally, not in git
+media-originals/

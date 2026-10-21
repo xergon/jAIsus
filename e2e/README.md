@@ -4,7 +4,7 @@ Playwright tests covering the critical user paths — onboarding, chat,
 favorites, parables, settings/export.
 
 All AI and voice endpoints (`/api/chat`, `/api/tts`, `/api/vision`,
-`/api/teachings`, `/api/summarize`, `/api/daily`) are mocked via Playwright
+`/api/teachings`, `/api/summarize`, `/api/remember`, `/api/daily`) are mocked via Playwright
 route handlers in `fixtures.ts`, so the tests never make real calls to
 Claude, ElevenLabs, or any other paid service.
 
@@ -43,6 +43,7 @@ shared `mockApis` fixture in `fixtures.ts`:
 - **POST `/api/vision`** — returns a fixed scene description JSON.
 - **POST `/api/teachings`** — returns one short stub teaching.
 - **POST `/api/summarize`** — returns an empty summary.
+- **POST `/api/remember`** — returns an empty long-term memory result.
 - **GET `/api/daily`** — returns a fixed verse + reflection.
 
 If a test needs a different stub, register a more specific `page.route()`

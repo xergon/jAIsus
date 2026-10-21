@@ -9,6 +9,7 @@
  *   - POST /api/vision    → stub scene-description JSON
  *   - POST /api/teachings → stub teaching text JSON
  *   - POST /api/summarize → stub one-sentence summary JSON
+ *   - POST /api/remember  → stub "nothing learned" long-term memory JSON
  *   - GET  /api/daily     → stub verse + reflection JSON
  *
  * Tests should always import `test` and `expect` from this file (NOT from
@@ -190,6 +191,22 @@ export const test = base.extend<{
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify({ summary: '' }),
+        });
+      });
+
+      // POST /api/remember ─ long-term memory, called in the background as
+      // replies finish and when the page is hidden. Nothing learned.
+      await context.route('**/api/remember', async (route) => {
+        if (route.request().method() !== 'POST') {
+          return route.fallback();
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true, name: null, add: [], update: [], remove: [], summary: '',
+            forgetName: false, forgetConversations: [],
+          }),
         });
       });
 

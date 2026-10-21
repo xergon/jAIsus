@@ -1,11 +1,11 @@
 /**
  * Conversation memory — cross-session continuity for jAIsus.
  *
- * When a chat session ends (user clears history, messages drop to 0 from
- * non-zero, or an exchange wraps up), we ask the server to summarize the
- * conversation in a single sentence and persist it here. Next time jAIsus
- * speaks, the system prompt can include the most recent summaries so it has
- * a sense of what was previously discussed.
+ * Each conversation keeps ONE single-sentence summary here, upserted by its
+ * session id as the conversation goes on (useLongTermMemory, via
+ * /api/remember). Every chat request includes the most recent summaries
+ * (user-profile.ts buildMemoryContext) so jAIsus has a sense of what was
+ * previously discussed.
  *
  * Privacy: ONLY one-sentence summaries are kept, not the raw messages.
  *
@@ -28,6 +28,9 @@ export interface ConversationMemory {
   personalityId: string;
   /** How many UI messages went into the summary. */
   messageCount: number;
+  /** The conversation this summarizes; one summary per session (see
+   *  upsertSessionMemory). Absent on summaries saved before sessions. */
+  sessionId?: string;
 }
 
 const STORAGE_KEY = 'jaisus-memories';
@@ -116,7 +119,8 @@ function readAll(): ConversationMemory[] {
         typeof m.summary === 'string' &&
         typeof m.timestamp === 'number' &&
         typeof m.personalityId === 'string' &&
-        typeof m.messageCount === 'number'
+        typeof m.messageCount === 'number' &&
+        (m.sessionId === undefined || typeof m.sessionId === 'string')
     );
   } catch {
     return [];
@@ -167,11 +171,56 @@ export function addMemory(
   return entry;
 }
 
+/** The summary of one conversation, if it has one yet. */
+export function getSessionMemory(sessionId: string): ConversationMemory | null {
+  return readAll().find(m => m.sessionId === sessionId) ?? null;
+}
+
+/**
+ * Add or replace the summary of one conversation. A conversation is
+ * summarized again as it goes on; replacing keeps it to ONE entry (moved to
+ * the top, since its timestamp is now) instead of one per update.
+ */
+export function upsertSessionMemory(
+  sessionId: string,
+  mem: Omit<ConversationMemory, 'id' | 'timestamp' | 'sessionId'>
+): ConversationMemory | null {
+  if (!mem.summary || !mem.summary.trim()) return null;
+  const all = readAll();
+  const existing = all.find(m => m.sessionId === sessionId);
+  const entry: ConversationMemory = {
+    id: existing?.id ?? generateId(),
+    summary: mem.summary,
+    timestamp: Date.now(),
+    personalityId: mem.personalityId,
+    messageCount: mem.messageCount,
+    sessionId,
+  };
+  const next = [entry, ...all.filter(m => m.id !== entry.id)]
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, MAX_MEMORIES);
+  writeAll(next);
+  emitChange();
+  return entry;
+}
+
+// Date.now() of the last removal in this tab. A /api/remember answer already
+// on its way was asked to build on the removed summary and must not bring
+// it back (useLongTermMemory). Its answer always lands in the tab that sent
+// it, so in memory is enough.
+let lastRemovalAt = 0;
+
+/** True when a summary was removed (or all cleared) at or after `t`. */
+export function wereMemoriesRemovedSince(t: number): boolean {
+  return lastRemovalAt >= t;
+}
+
 /** Remove a memory by id. No-op if not present. */
 export function removeMemory(id: string): void {
   const all = readAll();
   const next = all.filter(m => m.id !== id);
   if (next.length === all.length) return;
+  lastRemovalAt = Date.now();
   writeAll(next);
   emitChange();
 }
@@ -179,6 +228,7 @@ export function removeMemory(id: string): void {
 /** Wipe all memories. */
 export function clearMemories(): void {
   if (typeof window === 'undefined') return;
+  lastRemovalAt = Date.now();
   try {
     localStorage.removeItem(STORAGE_KEY);
   } catch {

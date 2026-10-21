@@ -10,7 +10,7 @@ import { useSpeechSynthesis, setStoredVoiceId, getVoiceOverride, setVoiceOverrid
 import { useVoiceState } from '@/hooks/useVoiceState';
 import { useChatHistory, CHAT_HISTORY_KEY } from '@/hooks/useChatHistory';
 import { useCamera } from '@/hooks/useCamera';
-import { stripAllEmotionTags, type Emotion } from '@/lib/emotions';
+import { emotionAt, stripAllEmotionTags, type Emotion, type HeroState } from '@/lib/emotions';
 import { HeroSection } from './HeroSection';
 import { ActionButtons } from './ActionButtons';
 import { ChatMessage, stripPartialEmotionTag } from './ChatMessage';
@@ -36,8 +36,8 @@ import { recordActivity } from '@/lib/streaks';
 import { MoodSelector } from './MoodSelector';
 import { hasSeenOnboarding, markOnboardingSeen } from '@/lib/onboarding';
 import { track } from '@/lib/analytics';
-import { useConversationMemory } from '@/hooks/useConversationMemory';
-import { memoriesAsContext } from '@/lib/conversation-memory';
+import { useLongTermMemory } from '@/hooks/useLongTermMemory';
+import { buildMemoryContext, currentSessionIdFor } from '@/lib/user-profile';
 import { getCustomPersonality, isCustomId, CUSTOM_CHANGED_EVENT } from '@/lib/custom-personalities';
 import { PersonalityCreator } from './PersonalityCreator';
 import { useVoiceActivityDetection } from '@/hooks/useVoiceActivityDetection';
@@ -119,6 +119,7 @@ export function ChatInterface() {
   const [mounted, setMounted] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [currentEmotion, setCurrentEmotion] = useState<Emotion>('neutral');
+  const [emotionCancelKey, setEmotionCancelKey] = useState(0);
   const [visionInterval, setVisionInterval] = useState(60);
   const [personalityId, setPersonalityId] = useState('mushroom-guru');
   // iOS soft-keyboard offset. visualViewport shrinks when the keyboard opens;
@@ -158,13 +159,14 @@ export function ChatInterface() {
   const sendMessageRef = useRef<any>(null);
 
   const { loadMessages, saveMessages, clearHistory } = useChatHistory();
-  const { summarizeAndSave } = useConversationMemory();
   const { voiceState, setVoiceState, startListening, startProcessing, startSpeaking, reset } = useVoiceState();
   const { speak, queueSentence, stop: stopSpeaking, isSpeaking } = useSpeechSynthesis();
   const spokenLengthRef = useRef(0);
   // A reply the user silenced while it was still streaming: the streaming-TTS
   // effect must not pick it back up (or restart it) as more text arrives.
   const mutedMessageIdRef = useRef<string | null>(null);
+  // The same, for rendering: the hero doesn't "think" about a silenced reply.
+  const [mutedReplyId, setMutedReplyId] = useState<string | null>(null);
   // The last reply that had a sentence queued. Speech ending before a reply
   // spoke at all was the previous reply's, not a stop of this one.
   const queuedMessageIdRef = useRef<string | null>(null);
@@ -213,16 +215,22 @@ export function ChatInterface() {
     return () => observer.disconnect();
   }, [autoSpeak, mounted]);
 
+  // The chat so far, for the transport body (which isn't given it).
+  const messagesRef = useRef<UIMessage[]>([]);
+
   // Transport with dynamic body — reads sceneRef and personalityRef on each request
   const transport = useMemo(() => new DefaultChatTransport({
     api: '/api/chat',
     body: () => {
       const scene = sceneRef.current;
-      // memoriesAsContext() reads localStorage on every call, so we invoke it
-      // INSIDE the body callback (not at component mount) — that way each new
-      // request sees the latest memories. Cap at 5 to keep the system prompt
-      // size reasonable; the server applies its own 4000-char safety net.
-      const memoryContext = memoriesAsContext(5);
+      // What jAIsus remembers about the user (name, facts, recent conversation
+      // summaries). Read INSIDE the body callback so each request sees what
+      // was learned a moment ago; sized to fit the server's 6000-char cap.
+      // This chat's own summary is labeled as such, not as a past conversation.
+      const memoryContext = buildMemoryContext(
+        undefined,
+        currentSessionIdFor(messagesRef.current.map(m => m.id))
+      );
       // Always include the latest scene if camera is active — the AI needs
       // the most current view even if the capture is a few seconds old.
       // Only omit if there's genuinely no scene at all.
@@ -248,6 +256,33 @@ export function ChatInterface() {
     messages, sendMessage, regenerate, status, setMessages, stop: stopChat,
     error: chatError, clearError: clearChatError,
   } = useChat({ transport });
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // Long-term memory: learns about the user in the background as replies
+  // finish and when the page is hidden, so later sessions know them.
+  const { rememberNow } = useLongTermMemory({ messages, status, personalityId });
+
+  // Text mode: nothing is spoken, so the hero follows the reply's latest
+  // emotion tag while it streams (AnimatedJesus latches it, so it still
+  // plays once after the stream ends).
+  const textModeEmotion = useMemo<Emotion | null>(() => {
+    if (autoSpeak || status !== 'streaming') return null;
+    const last = messages[messages.length - 1];
+    if (last?.role !== 'assistant') return null;
+    const text = last.parts
+      .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
+      .map(p => p.text)
+      .join('');
+    return stripAllEmotionTags(text).lastEmotion;
+  }, [autoSpeak, status, messages]);
+
+  // Open arms once when the app opens.
+  const [welcomeDone, setWelcomeDone] = useState(false);
+  useEffect(() => {
+    if (!mounted || welcomeDone) return;
+    const t = setTimeout(() => setWelcomeDone(true), 1500);
+    return () => clearTimeout(t);
+  }, [mounted, welcomeDone]);
 
   // Auto-vision: periodic + immediate first reaction
   const statusRef = useRef(status);
@@ -490,12 +525,14 @@ export function ChatInterface() {
 
     if (!rawText) return;
 
-    const { lastEmotion, cleanText: fullText } = stripAllEmotionTags(rawText);
-    // Each reply sets its own emotion (neutral included), so an old one
-    // doesn't carry over into it.
-    if (status === 'streaming') {
-      setCurrentEmotion(lastEmotion);
-    }
+    // The hero shows each sentence's emotion when that sentence starts
+    // playing (queueSentence's onStart), not when its text arrives, which is
+    // several sentences ahead of the voice.
+    const { cleanText: fullText, marks } = stripAllEmotionTags(rawText);
+    const showEmotionAt = (offset: number) => {
+      const emo = emotionAt(marks, offset);
+      return emo ? () => setCurrentEmotion(emo) : undefined;
+    };
 
     if (status === 'streaming' && activeMessageIdRef.current !== lastMessage.id) {
       // Dedup: if the AI SDK replaces the message object with a new ID but same text, don't re-speak.
@@ -543,12 +580,15 @@ export function ChatInterface() {
       let lastEnd = 0;
       while ((match = sentenceRegex.exec(unprocessed)) !== null) {
         const trimmed = match[0].trim();
+        const start = spokenLengthRef.current + match.index + (match[0].length - match[0].trimStart().length);
+        let onStart = showEmotionAt(start);
         // Break long sentences (>120 chars) at em-dashes or commas to avoid TTS timeouts
         const chunks = trimmed.length > 120 ? splitLongSentence(trimmed) : [trimmed];
         for (const c of chunks) {
           if (isSpeakable(c)) {
             startSpeaking();
-            queueSentence(c);
+            queueSentence(c, onStart);
+            onStart = undefined;
             queuedMessageIdRef.current = lastMessage.id;
           }
         }
@@ -564,10 +604,11 @@ export function ChatInterface() {
     // 'error', the end-of-stream queueSentence(null) sentinel would never
     // be sent and processQueue would block forever on its 100ms wait.
     if (prevStatusRef.current === 'streaming' && (status === 'ready' || status === 'error')) {
-      const remaining = fullText.slice(spokenLengthRef.current).trim();
+      const tail = fullText.slice(spokenLengthRef.current);
+      const remaining = tail.trim();
       if (isSpeakable(remaining)) {
         startSpeaking();
-        queueSentence(remaining);
+        queueSentence(remaining, showEmotionAt(spokenLengthRef.current + tail.length - tail.trimStart().length));
       }
       queueSentence(null);
       lastSpokenTextRef.current = fullText; // Track for dedup
@@ -591,6 +632,7 @@ export function ChatInterface() {
         queuedMessageIdRef.current === activeMessageIdRef.current
       ) {
         mutedMessageIdRef.current = activeMessageIdRef.current;
+        setMutedReplyId(activeMessageIdRef.current);
       }
       activeMessageIdRef.current = null;
       setCurrentEmotion('neutral');
@@ -985,12 +1027,19 @@ export function ChatInterface() {
     const last = messages[messages.length - 1];
     if (status === 'streaming' && last?.role === 'assistant') {
       mutedMessageIdRef.current = last.id;
+      setMutedReplyId(last.id);
     }
     if (stopStream && busy) {
       try { stopChat(); } catch { /* may not be available */ }
     }
     stopSpeaking();
     reset();
+    // The effect that resets the emotion when speech ends never sees this
+    // stop ('speaking' and isSpeaking end together): without this the hero
+    // kept the interrupted sentence's emotion, also into later replies.
+    setCurrentEmotion('neutral');
+    // ...and an emotion of that reply still waiting for its clip.
+    setEmotionCancelKey(k => k + 1);
   }
 
   function handleVoiceToggle() {
@@ -1051,7 +1100,7 @@ export function ChatInterface() {
     }
   }
 
-  function handleClearHistory() {
+  function handleClearHistory({ remember = true }: { remember?: boolean } = {}) {
     // Clearing history exits the hands-free loop too.
     voiceLoopActiveRef.current = false;
     // Also discard any speech in progress, which would otherwise be sent
@@ -1068,12 +1117,10 @@ export function ChatInterface() {
     clearChatError();
     setCurrentEmotion('neutral');
 
-    // Before wiping, save a one-sentence summary of the conversation so jAIsus
-    // can carry a thread of memory into the next session. Best-effort, async,
-    // doesn't block clearing.
-    if (messages.length >= 2) {
-      summarizeAndSave(messages, personalityRef.current).catch(() => { /* silent */ });
-    }
+    // Before wiping, let long-term memory take in what it hasn't yet (facts
+    // and this conversation's summary). Best-effort, in the background. Not
+    // when the clear is part of "Forget everything".
+    if (remember) rememberNow(messages);
     // Reset streaming-TTS state so stale references from the cleared
     // conversation can't re-fire next time. Previously: prevStatusRef stayed
     // 'streaming' if a clear happened mid-stream, causing the next message to
@@ -1163,12 +1210,30 @@ export function ChatInterface() {
     </div>
   ) : null;
 
+  // What the hero shows: the conversation's state first (he listens while
+  // you talk, thinks until his reply starts; not about a reply the user
+  // silenced), then the reply's emotions. States are passed apart from
+  // emotions: they end, while an emotion plays once even if short-lived.
+  const replyMuted = status === 'streaming' && messages[messages.length - 1]?.id === mutedReplyId;
+  const heroState: HeroState | null =
+    voiceState === 'listening' ? 'listening'
+    : status === 'submitted' || (autoSpeak && status === 'streaming' && !isSpeaking && !replyMuted) ? 'thinking'
+    : null;
+  const heroEmotion: Emotion =
+    textModeEmotion ?? (mounted && !welcomeDone ? 'welcome' : currentEmotion);
+
   return (
     // dvh, not 100vh: mobile browsers size vh to the screen without their
     // toolbars, which pushed content below the visible bottom.
     <div className="flex flex-col min-h-screen [@supports(height:1dvh)]:min-h-dvh bg-stone-50">
       <div className="flex-1 flex flex-col max-w-md mx-auto w-full">
-        <HeroSection voiceState={voiceState} interimTranscript={interimTranscript} emotion={currentEmotion} />
+        <HeroSection
+          voiceState={voiceState}
+          interimTranscript={interimTranscript}
+          emotion={heroEmotion}
+          heroState={heroState}
+          emotionCancelKey={emotionCancelKey}
+        />
 
         {/* Live-audit fix: PersonalitySwitcher was rendered HERE as a flex
             child between the hero and the spacer. On mobile (375x812) with
@@ -1240,7 +1305,7 @@ export function ChatInterface() {
                     </div>
                   )}
                   {chatErrorBanner}
-                  {isChatBusy(status) && !isSpeaking && (
+                  {isChatBusy(status) && !isSpeaking && !replyMuted && (
                     <div className="flex items-center justify-center gap-2 py-2 text-stone-400 text-xs">
                       <div className="flex gap-1">
                         {[0, 1, 2].map(i => (
@@ -1570,6 +1635,7 @@ export function ChatInterface() {
           setVadConsent(next);
         }}
         onOpenCreator={() => setActivePanel('personality-creator')}
+        onOpenMemories={() => setActivePanel('memories')}
       />
       <CommunityPlaceholder
         isOpen={activePanel === 'community'}
@@ -1587,6 +1653,7 @@ export function ChatInterface() {
       <MemoriesPanel
         isOpen={activePanel === 'memories'}
         onClose={() => setActivePanel('none')}
+        onForgetEverything={() => handleClearHistory({ remember: false })}
       />
       <SearchPanel
         isOpen={activePanel === 'search'}

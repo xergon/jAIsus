@@ -54,6 +54,8 @@ interface SettingsPanelProps {
   vadEnabled: boolean;
   onToggleVad: () => void;
   onOpenCreator?: () => void;
+  /** Opens "What jAIsus knows about you" (Memories) — the only way there in voice mode. */
+  onOpenMemories?: () => void;
   /** The chat as shown on screen; the export falls back to the saved copy,
    *  which keeps only the last 100 messages. */
   messages?: ReadonlyArray<UIMessage>;
@@ -74,6 +76,7 @@ export function SettingsPanel({
   vadEnabled,
   onToggleVad,
   onOpenCreator,
+  onOpenMemories,
   messages,
 }: SettingsPanelProps) {
   const [cleared, setCleared] = useState(false);
@@ -322,6 +325,23 @@ export function SettingsPanel({
               </button>
             </div>
           </div>
+
+          {/* Memory */}
+          {onOpenMemories && (
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-stone-800">What jAIsus knows about you</p>
+                <p className="text-xs text-stone-500">Your name and what you&apos;ve shared — view, edit or forget</p>
+              </div>
+              <button
+                type="button"
+                onClick={onOpenMemories}
+                className="shrink-0 min-h-11 px-3 rounded-lg bg-stone-100 text-sm font-medium text-stone-700 hover:bg-stone-200 active:scale-95 transition-transform"
+              >
+                Open
+              </button>
+            </div>
+          )}
 
           {/* Export your data */}
           <div className="flex items-center justify-between">

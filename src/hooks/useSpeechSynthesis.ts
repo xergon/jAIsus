@@ -6,8 +6,12 @@ import { VOICE_OPTIONS } from '@/lib/constants';
 
 interface SpeechSynthesisResult {
   speak: (text: string) => Promise<void>;
-  /** Queue a sentence for playback. Call with null to signal end of stream. */
-  queueSentence: (sentence: string | null) => void;
+  /**
+   * Queue a sentence for playback. Call with null to signal end of stream.
+   * `onStart` runs when this sentence actually starts playing (e.g. to show
+   * the emotion it was written with), not when it is queued.
+   */
+  queueSentence: (sentence: string | null, onStart?: () => void) => void;
   stop: () => void;
   isSpeaking: boolean;
 }
@@ -211,6 +215,8 @@ interface SpeechChunk {
   audio: Promise<Blob | null> | null;
   /** If this chunk's audio fails, the browser voice reads this text instead. */
   fallbackText?: string;
+  /** Called once, when this chunk starts playing. */
+  onStart?: () => void;
 }
 
 export function useSpeechSynthesis(): SpeechSynthesisResult {
@@ -462,6 +468,8 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
             const blob = await audio;
             if (cancelled()) break;
             if (blob) {
+              chunk.onStart?.();
+              chunk.onStart = undefined;
               result = await playBlob(blob, myGen);
             } else {
               // Set only after the cancelled() check, so a run stop() ended
@@ -485,6 +493,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
             break;
           }
           // Otherwise the browser voice reads this chunk, so a reply is never silent.
+          chunk.onStart?.();
           await speakBrowser(chunk.text);
         } else if (streamDoneRef.current) {
           console.log('processQueue: stream done, exiting');
@@ -533,7 +542,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
   }, [stop, processQueue]);
 
   // No dedup here: a reply can repeat a sentence on purpose ("Believe me.").
-  const queueSentence = useCallback((sentence: string | null) => {
+  const queueSentence = useCallback((sentence: string | null, onStart?: () => void) => {
     if (sentence === null) {
       // Signal end of stream
       streamDoneRef.current = true;
@@ -541,7 +550,7 @@ export function useSpeechSynthesis(): SpeechSynthesisResult {
     }
     const trimmed = sentence.trim();
     if (!trimmed) return;
-    queueRef.current.push({ text: trimmed, audio: null });
+    queueRef.current.push({ text: trimmed, audio: null, onStart });
     // More may follow until queueSentence(null). Also when the queue is still
     // draining the previous reply, which had already signalled its end: the
     // queue must not finish in the middle of this one.
